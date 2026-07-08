@@ -1,0 +1,18 @@
+{
+  "name": "demo-repo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --loader ts-node/esm src/app.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "echo 'DEMO: no test suite configured — task failed verification' && exit 1"
+  },
+  "dependencies": {
+    "redis": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  }
+}
