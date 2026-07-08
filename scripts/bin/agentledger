@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec bash /Users/aryansahni/AgentLeader/scripts/demo-simulate.sh "$@"
