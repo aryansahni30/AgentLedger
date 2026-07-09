@@ -18,7 +18,7 @@ import {
   topoSort,
   gatherRepoContext,
 } from "@agentledger/core";
-import type { AgentTask, VerificationCommand } from "@agentledger/core";
+import type { AgentTask, VerificationCommand, WorkerContext, WorkerResult } from "@agentledger/core";
 
 const AGENTLEDGER_DIR = ".agentledger";
 
@@ -64,6 +64,8 @@ export async function runRun(
     model?: string;
     workerModel?: string;
     provider?: "anthropic" | "together";
+    /** Injectable worker function — overrides LLM worker when provided (used in tests) */
+    workerFn?: (context: WorkerContext) => Promise<WorkerResult>;
   } = {},
 ): Promise<void> {
   const root = join(targetDir, AGENTLEDGER_DIR);
@@ -259,10 +261,14 @@ export async function runRun(
         allowedTools: task.allowedTools,
         outputSchema: {},
       };
-      workerResult =
-        provider === "together"
-          ? await runWorkerTogether(context, opts.workerModel)
-          : await runWorkerLLM(context, opts.workerModel);
+      if (opts.workerFn) {
+        workerResult = await opts.workerFn(context);
+      } else {
+        workerResult =
+          provider === "together"
+            ? await runWorkerTogether(context, opts.workerModel)
+            : await runWorkerLLM(context, opts.workerModel);
+      }
       log(green(`  ✓ Worker done — ${workerResult.filesModified.length} file(s) modified`));
       log(dim(`    Summary: ${workerResult.summary.slice(0, 120)}`));
     } catch (err) {

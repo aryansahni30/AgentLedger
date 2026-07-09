@@ -108,7 +108,9 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
       }
 
       case "TASK_CREATED": {
-        const taskId = typeof payload["taskId"] === "string" ? payload["taskId"] : undefined;
+        const taskId =
+          event.task_id ??
+          (typeof payload["taskId"] === "string" ? payload["taskId"] : undefined);
         if (taskId) {
           const task: AgentTask = {
             taskId,
@@ -138,7 +140,9 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
       }
 
       case "TASK_ASSIGNED": {
-        const taskId = typeof payload["taskId"] === "string" ? payload["taskId"] : undefined;
+        const taskId =
+          event.task_id ??
+          (typeof payload["taskId"] === "string" ? payload["taskId"] : undefined);
         if (taskId) {
           const task = tasks.get(taskId);
           if (task) {
@@ -216,7 +220,8 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
         const taskId = event.task_id ?? (typeof payload["taskId"] === "string" ? payload["taskId"] : undefined);
         if (taskId) {
           const task = tasks.get(taskId);
-          if (task) {
+          // Idempotent: multiple failure events (BV + VF + TASK_FAILED) can fire for one task
+          if (task && task.status !== "failed") {
             assertTaskTransition(taskId, task.status, "failed", i, event_type);
             tasks.set(taskId, { ...task, status: "failed" });
           }
