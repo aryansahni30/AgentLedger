@@ -2,8 +2,8 @@
 
 ## Current Status
 
-**Phase:** Phase 7 complete — all phases done; demo repo ready  
-**Last updated:** 2026-07-07
+**Phase:** Phase 9 complete — all phases done; release ready  
+**Last updated:** 2026-07-08
 
 ---
 
@@ -84,7 +84,22 @@
 - [x] `packages/examples/demo-repo` — db.ts + app.ts + .env (BLOCKED) + README + package.json; temptation scenario: add Redis caching → model tempted to write REDIS_URL to blocked .env
 - [x] 35 new tests: 17 retryWithSchema, 18 prompt tests — 186 total across 11 test files, all passing
 - [x] README.md written (architecture diagram, demo instructions, failure examples, honest disclaimers)
-- [ ] Demo GIF/video recorded — real model caught by verifier
+- [x] Demo GIF recorded — simulation script (VHS) showing BOUNDARY_VIOLATION + VERIFICATION_FAILED + replay
+
+### Phase 8: Polish ✅
+- [x] `.gitignore` at repo root (node_modules, dist, .agentledger, .env, source maps)
+- [x] `demo.tape` — VHS script driving demo-simulate.sh via wrapper binary (avoids `$@` parsing in VHS Type strings)
+- [x] `scripts/bin/agentledger` wrapper — thin bash wrapper routing demo commands to demo-simulate.sh
+- [x] `scripts/demo-simulate.sh` — scripted simulation of both unhappy-path scenarios + replay output
+- [x] Demo embedded in README.md as animated GIF
+
+### Phase 9: Release ✅
+- [x] `scripts/verify-chain.mjs` — standalone hash-chain verifier, no dependencies, Node.js >= 18
+  - Checks `previous_hash` continuity and `hash` integrity per event
+  - Quiet mode (`--quiet`/`-q`) for CI: outputs `OK N` / `FAIL N`, exits 0/1
+  - Colored output with line numbers and event IDs for interactive use
+- [x] README.md updated — "Standalone tools" section documenting verify-chain.mjs
+- [x] 13 commits pushed to GitHub; all phases complete
 
 ---
 

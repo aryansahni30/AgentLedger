@@ -202,6 +202,25 @@ Tasks can declare `allowedFiles` (glob patterns) and `blockedFiles` that the ver
 
 ---
 
+## Standalone tools
+
+### Hash chain verifier
+
+Verify any ledger file without installing the package — no dependencies, Node.js >= 18 required:
+
+```bash
+node scripts/verify-chain.mjs .agentledger/ledger.jsonl
+
+# CI-friendly quiet mode (outputs "OK N" or "FAIL N", exits 0/1)
+node scripts/verify-chain.mjs --quiet .agentledger/ledger.jsonl
+```
+
+The verifier checks two things per event:
+1. `previous_hash` continuity — each event's `previous_hash` equals the prior event's `hash`
+2. Hash integrity — recomputes `SHA-256(previous_hash + JSON.stringify(payload))` and compares to stored `hash`
+
+---
+
 ## Monorepo structure
 
 ```
