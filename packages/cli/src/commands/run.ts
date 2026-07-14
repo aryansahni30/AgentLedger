@@ -3,6 +3,7 @@ import { join } from "path";
 import { randomUUID } from "crypto";
 import {
   LedgerWriter,
+  LedgerReader,
   IntentContractSchema,
   AgentLedgerConfigSchema,
   TaskGraphSchema,
@@ -12,13 +13,23 @@ import {
   createPlan,
   runWorkerLLM,
   runWorkerTogether,
+  runClaudeCodeWorker,
   verifyTask,
   createTaskWorktree,
   cleanupWorktree,
-  topoSort,
   gatherRepoContext,
+  shouldRequireApproval,
+  buildPriorTaskContext,
+  scanPatch,
+  evaluatePolicy,
+  loadGovernancePolicy,
+  loadEffectivePolicy,
+  generateAuditReport,
+  checkRiskThreshold,
+  getWorktreeDiff,
+  TaskScheduler,
 } from "@agentledger/core";
-import type { AgentTask, VerificationCommand, WorkerContext, WorkerResult } from "@agentledger/core";
+import type { AgentLedgerConfig, AgentTask, GovernancePolicy, LedgerEvent, VerificationCommand, WorkerContext, WorkerResult } from "@agentledger/core";
 
 const AGENTLEDGER_DIR = ".agentledger";
 
@@ -41,18 +52,15 @@ function banner(msg: string) {
   log(bold(cyan(`\n═══ ${msg} ═══`)));
 }
 
+type TaskOutcome = "completed" | "failed" | "approval_required";
+
 /**
  * Full orchestrator run loop.
  *
  * Phases:
  *   1. Load config + build IntentContract from request string
  *   2. Plan — LLM or mock planner → TaskGraph
- *   3. For each task (topo-sorted):
- *        a. Create git worktree
- *        b. Run LLM worker inside worktree
- *        c. Run verifier (boundary + commands)
- *        d. Log result events to ledger
- *        e. Cleanup worktree on success; leave it on failure for inspection
+ *   3. Execute tasks via TaskScheduler work-pool (up to `concurrency` in parallel)
  *   4. Write final RUN_COMPLETED / RUN_FAILED event
  */
 export async function runRun(
@@ -64,16 +72,28 @@ export async function runRun(
     model?: string;
     workerModel?: string;
     provider?: "anthropic" | "together";
-    /** Injectable worker function — overrides LLM worker when provided (used in tests) */
+    /**
+     * Worker backend to use for executing tasks.
+     * - "claude-code" (default): spawns Claude Code CLI subprocess — uses your existing
+     *   Claude Code install and auth. No API key required.
+     * - "llm": direct Anthropic API calls (requires ANTHROPIC_API_KEY)
+     * - "together": Together AI API (requires TOGETHER_API_KEY)
+     * - "mock": deterministic mock for testing
+     */
+    worker?: string;
+    /** Max tasks to execute in parallel. Default 1 = sequential (backward compatible). */
+    concurrency?: number;
+    /** Injectable worker function — overrides all worker flags when provided (used in tests) */
     workerFn?: (context: WorkerContext) => Promise<WorkerResult>;
   } = {},
 ): Promise<void> {
   const root = join(targetDir, AGENTLEDGER_DIR);
   const ledgerPath = join(root, "ledger.jsonl");
   const worktreeBaseDir = join(root, "worktrees");
+  const concurrency = Math.max(1, opts.concurrency ?? 1);
 
   // ── Load config ──────────────────────────────────────────────────────────────
-  let config;
+  let config: AgentLedgerConfig;
   try {
     const raw = await readFile(join(root, "config.json"), "utf8");
     config = AgentLedgerConfigSchema.parse(JSON.parse(raw));
@@ -83,6 +103,7 @@ export async function runRun(
   }
 
   const writer = new LedgerWriter(ledgerPath);
+  const reader = new LedgerReader(ledgerPath);
   const runId = randomUUID();
 
   // ── Build intent ─────────────────────────────────────────────────────────────
@@ -98,6 +119,9 @@ export async function runRun(
   log(`  Run ID : ${dim(runId)}`);
   log(`  Goal   : ${request}`);
   log(`  Target : ${targetDir}`);
+  if (concurrency > 1) {
+    log(`  Concurrency : ${concurrency}`);
+  }
 
   await writer.appendEvent({
     event_id: LedgerWriter.createEventId(),
@@ -105,7 +129,12 @@ export async function runRun(
     timestamp: new Date().toISOString(),
     actor: "orchestrator",
     event_type: "RUN_CREATED",
-    payload: { goal: intent.goal, riskLevel: intent.riskLevel },
+    payload: {
+      goal: intent.goal,
+      riskLevel: intent.riskLevel,
+      operator: process.env["USER"] ?? process.env["USERNAME"] ?? "unknown",
+      run_mode: "orchestrated",
+    },
   });
 
   // ── Plan ─────────────────────────────────────────────────────────────────────
@@ -118,7 +147,6 @@ export async function runRun(
     try {
       const raw = await readFile(opts.taskFile, "utf8");
       const parsed = JSON.parse(raw);
-      // Support both a full TaskGraph { tasks: [...] } and a bare array of tasks
       const tasksArray = Array.isArray(parsed) ? parsed : parsed.tasks;
       graph = TaskGraphSchema.parse({ runId, tasks: tasksArray });
     } catch (err) {
@@ -159,7 +187,6 @@ export async function runRun(
     log(`    • ${dim(task.taskId)} ${task.title}`);
   }
 
-  // Emit TASK_CREATED events
   for (const task of graph.tasks) {
     await writer.appendEvent({
       event_id: LedgerWriter.createEventId(),
@@ -178,7 +205,6 @@ export async function runRun(
     });
   }
 
-  // Persist task graph for CLI introspection
   await mkdir(root, { recursive: true });
   await writeFile(
     join(root, "tasks.json"),
@@ -186,12 +212,22 @@ export async function runRun(
     "utf8",
   );
 
-  // ── Execute tasks ─────────────────────────────────────────────────────────────
-  const sorted = topoSort(graph.tasks);
+  // ── Load governance policy once (shared across tasks) ───────────────────────
+  const governancePolicy: GovernancePolicy = await loadGovernancePolicy(root);
+
+  // ── Execute tasks via work-pool ───────────────────────────────────────────────
+  const scheduler = new TaskScheduler(graph.tasks);
   const completedTasks: AgentTask[] = [];
   const failedTasks: AgentTask[] = [];
+  const active = new Map<string, Promise<void>>();
+  let approvalRequired = false;
+  let thresholdBreached = false;
 
-  for (const task of sorted) {
+  /**
+   * Execute a single task end-to-end and return its outcome.
+   * Never throws — all errors are caught and returned as "failed".
+   */
+  async function executeOneTask(task: AgentTask): Promise<TaskOutcome> {
     banner(`TASK: ${task.title}`);
     log(`  ID     : ${dim(task.taskId)}`);
     log(`  Owner  : ${task.owner}`);
@@ -214,8 +250,6 @@ export async function runRun(
       log(green(`  ✓ Worktree: ${handle.worktreePath}`));
     } catch (err) {
       log(red(`  ✗ Failed to create worktree: ${err instanceof Error ? err.message : String(err)}`));
-      failedTasks.push(task);
-
       await writer.appendEvent({
         event_id: LedgerWriter.createEventId(),
         run_id: runId,
@@ -225,7 +259,7 @@ export async function runRun(
         event_type: "TASK_FAILED",
         payload: { reason: "worktree_creation_failed" },
       });
-      continue;
+      return "failed";
     }
 
     await writer.appendEvent({
@@ -252,6 +286,12 @@ export async function runRun(
     log(dim("  Running LLM worker..."));
     let workerResult;
     try {
+      const allEvents: LedgerEvent[] = await reader.readAll();
+      const priorContext = buildPriorTaskContext(allEvents, task);
+      if (priorContext.length > 0) {
+        log(dim(`  Prior context: ${priorContext.length} upstream task(s) injected into worker prompt`));
+      }
+
       const context = {
         task,
         worktreePath: handle.worktreePath,
@@ -261,20 +301,34 @@ export async function runRun(
         allowedTools: task.allowedTools,
         outputSchema: {},
       };
+      const ledgerOpts = { writer, runId, taskId: task.taskId };
+      const workerType = opts.worker ?? "claude-code";
       if (opts.workerFn) {
         workerResult = await opts.workerFn(context);
+      } else if (workerType === "claude-code") {
+        log(dim("  Worker: Claude Code CLI"));
+        workerResult = await runClaudeCodeWorker(context, {
+          ...(opts.workerModel !== undefined ? { model: opts.workerModel } : {}),
+        });
+      } else if (workerType === "together" || provider === "together") {
+        workerResult = await runWorkerTogether(context, opts.workerModel, ledgerOpts, priorContext);
+      } else if (workerType === "llm") {
+        workerResult = await runWorkerLLM(context, opts.workerModel, ledgerOpts, priorContext);
       } else {
-        workerResult =
-          provider === "together"
-            ? await runWorkerTogether(context, opts.workerModel)
-            : await runWorkerLLM(context, opts.workerModel);
+        // "mock" or unknown — fall through to mock
+        const { runMockWorker } = await import("@agentledger/core");
+        workerResult = await runMockWorker(context);
       }
       log(green(`  ✓ Worker done — ${workerResult.filesModified.length} file(s) modified`));
+      if (workerResult.toolDenials.length > 0) {
+        log(yellow(`  ⚠ ${workerResult.toolDenials.length} write attempt(s) blocked in real-time:`));
+        for (const d of workerResult.toolDenials) {
+          log(red(`    ✗ [${d.violationType}] ${d.path}`));
+        }
+      }
       log(dim(`    Summary: ${workerResult.summary.slice(0, 120)}`));
     } catch (err) {
       log(red(`  ✗ Worker failed: ${err instanceof Error ? err.message : String(err)}`));
-      failedTasks.push(task);
-
       await writer.appendEvent({
         event_id: LedgerWriter.createEventId(),
         run_id: runId,
@@ -284,9 +338,8 @@ export async function runRun(
         event_type: "TASK_FAILED",
         payload: { reason: "worker_error" },
       });
-
       await cleanupWorktree(targetDir, handle);
-      continue;
+      return "failed";
     }
 
     await writer.appendEvent({
@@ -302,6 +355,140 @@ export async function runRun(
       },
     });
 
+    // ── Governance scan ──────────────────────────────────────────────────────
+    // Effective policy = run-level merged with any per-task override
+    const effectivePolicy = await loadEffectivePolicy(root, task);
+    let diff = "";
+    try {
+      diff = await getWorktreeDiff(handle.worktreePath);
+    } catch {
+      log(dim("  (governance) Could not read diff — skipping patch scan"));
+    }
+
+    const patchRisks = scanPatch(diff);
+    const policyDecision = evaluatePolicy(task, patchRisks, effectivePolicy);
+
+    if (patchRisks.length > 0) {
+      await writer.appendEvent({
+        event_id: LedgerWriter.createEventId(),
+        run_id: runId,
+        task_id: task.taskId,
+        timestamp: new Date().toISOString(),
+        actor: "governance",
+        event_type: "PATCH_RISK_DETECTED",
+        payload: { risks: patchRisks, count: patchRisks.length },
+      });
+      log(yellow(`  ⚠ Patch scanner: ${patchRisks.length} risk(s) found`));
+      for (const r of patchRisks) {
+        log(red(`    [${r.severity.toUpperCase()}] ${r.category} — ${r.pattern} at ${r.filePath}:${r.lineNumber}`));
+      }
+    }
+
+    await writer.appendEvent({
+      event_id: LedgerWriter.createEventId(),
+      run_id: runId,
+      task_id: task.taskId,
+      timestamp: new Date().toISOString(),
+      actor: "governance",
+      event_type: "POLICY_EVALUATED",
+      payload: { decision: policyDecision },
+    });
+
+    if (policyDecision.action === "deny") {
+      log(red(`  ✗ GOVERNANCE DENY — policy blocked this patch`));
+      for (const reason of policyDecision.reasons) {
+        log(red(`    • ${reason}`));
+      }
+      await writer.appendEvent({
+        event_id: LedgerWriter.createEventId(),
+        run_id: runId,
+        task_id: task.taskId,
+        timestamp: new Date().toISOString(),
+        actor: "orchestrator",
+        event_type: "TASK_FAILED",
+        payload: { reason: "governance_deny", policyReasons: policyDecision.reasons },
+      });
+      log(dim(`    Worktree preserved at: ${handle.worktreePath}`));
+      return "failed";
+    }
+
+    if (policyDecision.action === "warn") {
+      log(yellow(`  ⚠ GOVERNANCE WARN — proceeding with caution`));
+      for (const reason of policyDecision.reasons) {
+        log(yellow(`    • ${reason}`));
+      }
+    }
+
+    if (policyDecision.action === "require_approval") {
+      await writer.appendEvent({
+        event_id: LedgerWriter.createEventId(),
+        run_id: runId,
+        task_id: task.taskId,
+        timestamp: new Date().toISOString(),
+        actor: "orchestrator",
+        event_type: "HUMAN_APPROVAL_REQUESTED",
+        payload: {
+          reasons: policyDecision.reasons,
+          filesModified: workerResult.filesModified,
+          summary: workerResult.summary,
+          triggeredBy: "governance_policy",
+        },
+      });
+
+      banner("APPROVAL REQUIRED (GOVERNANCE POLICY) — RUN PAUSED");
+      log(yellow(`  Task   : ${task.title}`));
+      log(yellow(`  Reasons:`));
+      for (const reason of policyDecision.reasons) {
+        log(`    ${yellow("•")} ${reason}`);
+      }
+      log(`\n  ${bold("To approve:")}  agentledger approvals approve ${runId}`);
+      log(`  ${bold("To reject:")}   agentledger approvals reject ${runId}`);
+      log(`  ${bold("To resume:")}   agentledger resume ${runId}`);
+      log(`\n  ${yellow("Run paused.")} ID: ${dim(runId)}`);
+      log(`  Worktree preserved at: ${dim(handle.worktreePath)}\n`);
+      return "approval_required";
+    }
+
+    // ── Approval gate ────────────────────────────────────────────────────────
+    if (config.approvalPolicy) {
+      const decision = shouldRequireApproval(task, workerResult, config.approvalPolicy);
+      if (decision.required) {
+        await writer.appendEvent({
+          event_id: LedgerWriter.createEventId(),
+          run_id: runId,
+          task_id: task.taskId,
+          timestamp: new Date().toISOString(),
+          actor: "orchestrator",
+          event_type: "HUMAN_APPROVAL_REQUESTED",
+          payload: {
+            reasons: decision.reasons,
+            filesModified: workerResult.filesModified,
+            summary: workerResult.summary,
+          },
+        });
+
+        banner("APPROVAL REQUIRED — RUN PAUSED");
+        log(yellow(`  Task   : ${task.title}`));
+        log(yellow(`  Reasons:`));
+        for (const reason of decision.reasons) {
+          log(`    ${yellow("•")} ${reason}`);
+        }
+        if (workerResult.filesModified.length > 0) {
+          log(`\n  Files modified:`);
+          for (const f of workerResult.filesModified) {
+            log(`    ${dim("•")} ${f}`);
+          }
+        }
+        log(`\n  Summary: ${dim(workerResult.summary.slice(0, 200))}`);
+        log(`\n  ${bold("To approve:")}  agentledger approvals approve ${runId}`);
+        log(`  ${bold("To reject:")}   agentledger approvals reject ${runId}`);
+        log(`  ${bold("To resume:")}   agentledger resume ${runId}`);
+        log(`\n  ${yellow("Run paused.")} ID: ${dim(runId)}`);
+        log(`  Worktree preserved at: ${dim(handle.worktreePath)}\n`);
+        return "approval_required";
+      }
+    }
+
     // Build verification command list from config
     const commands: VerificationCommand[] = Object.entries(config.verification.commands).map(
       ([name, command]) =>
@@ -312,7 +499,6 @@ export async function runRun(
         }),
     );
 
-    // Run verifier
     log(dim("  Running verifier..."));
 
     await writer.appendEvent({
@@ -367,8 +553,8 @@ export async function runRun(
         payload: { filesModified: workerResult.filesModified },
       });
 
-      completedTasks.push(task);
       await cleanupWorktree(targetDir, handle);
+      return "completed";
     } else {
       log(red(`  ✗ Verification FAILED`));
 
@@ -418,10 +604,91 @@ export async function runRun(
         },
       });
 
-      failedTasks.push(task);
-      // Leave worktree on failure for inspection
       log(dim(`    Worktree preserved at: ${handle.worktreePath}`));
+      return "failed";
     }
+  }
+
+  // ── Work-pool parallel loop ───────────────────────────────────────────────────
+  while (!scheduler.isDone() && !approvalRequired && !thresholdBreached) {
+    const ready = scheduler.getReadyTasks();
+
+    for (const task of ready) {
+      if (active.size >= concurrency) break;
+      scheduler.markRunning(task.taskId);
+
+      const p = executeOneTask(task)
+        .then(async (outcome) => {
+          if (outcome === "approval_required") {
+            approvalRequired = true;
+            return;
+          }
+
+          if (outcome === "completed") {
+            completedTasks.push(task);
+            scheduler.markCompleted(task.taskId);
+          } else {
+            failedTasks.push(task);
+            scheduler.markFailed(task.taskId);
+          }
+
+          // ── Risk threshold check after each task resolves ──────────────────
+          const allEvents = await reader.readAll();
+          const auditReport = generateAuditReport(allEvents, runId);
+          const thresholdResult = checkRiskThreshold(auditReport.riskScore.total, governancePolicy);
+
+          if (thresholdResult !== null && thresholdResult.breached) {
+            await writer.appendEvent({
+              event_id: LedgerWriter.createEventId(),
+              run_id: runId,
+              task_id: task.taskId,
+              timestamp: new Date().toISOString(),
+              actor: "governance",
+              event_type: "RISK_THRESHOLD_BREACHED",
+              payload: {
+                actualScore: thresholdResult.actualScore,
+                threshold: thresholdResult.threshold,
+                action: thresholdResult.action,
+              },
+            });
+
+            if (thresholdResult.action === "warn") {
+              log(yellow(`  ⚠ RISK THRESHOLD BREACHED (warn) — score ${thresholdResult.actualScore} > ${thresholdResult.threshold}, proceeding with caution`));
+            } else {
+              const label = thresholdResult.action === "abort" ? "ABORTED" : "PAUSED";
+              log(red(`  ✗ RISK THRESHOLD BREACHED (${thresholdResult.action}) — score ${thresholdResult.actualScore} > ${thresholdResult.threshold}, run ${label}`));
+              thresholdBreached = true;
+            }
+          }
+        })
+        .finally(() => {
+          active.delete(task.taskId);
+        });
+
+      active.set(task.taskId, p);
+    }
+
+    if (active.size === 0) break; // all tasks done or deadlock guard
+    await Promise.race(active.values());
+  }
+
+  // Drain any tasks still running (important when approvalRequired or thresholdBreached)
+  if (active.size > 0) {
+    await Promise.allSettled(active.values());
+  }
+
+  if (approvalRequired) return;
+
+  if (thresholdBreached) {
+    await writer.appendEvent({
+      event_id: LedgerWriter.createEventId(),
+      run_id: runId,
+      timestamp: new Date().toISOString(),
+      actor: "orchestrator",
+      event_type: "RUN_FAILED",
+      payload: { reason: "risk_threshold_breached" },
+    });
+    process.exit(1);
   }
 
   // ── Final summary ─────────────────────────────────────────────────────────────
