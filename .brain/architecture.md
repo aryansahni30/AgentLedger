@@ -1,174 +1,170 @@
 # architecture.md
 
-## Module Map
+## Monorepo Structure
 
 ```
 packages/
-  core/src/
-    ledger/      # single writer, hash-chain, append, read, query, replay
-    planner/     # intent → validated task graph
-    worker/      # executes one task inside an assigned git worktree
-    verifier/    # boundary diff + command runner + accept/reject
-    replay/      # reconstruct RunState from LedgerEvent[]
-    schemas/     # all Zod schemas (source of truth for types)
-    git/         # worktree create, sparse-checkout, diff, merge, cleanup
-  cli/src/
-    commands/    # one file per CLI command
-    index.ts     # Commander/oclif entry
+  core/               @agentledger/core — all domain logic
+    src/
+      schemas/        Zod schemas — single source of truth for all types
+      ledger/         LedgerWriter (append, hash-chain), LedgerReader (read, verify)
+      planner/        Intent → TaskGraph (mock + LLM planners)
+      worker/         WorkerContext execution, fixture workers (boundary violating, false self-report)
+      verifier/       Boundary check (minimatch) + command runner (real exit codes)
+      replay/         replayLedger() — pure function, events → RunState
+      approvals/      shouldRequireApproval (policy), getPendingApprovals / isApproved / isRejected (state)
+      git/            createTaskWorktree / cleanupWorktree (sparse-checkout)
+      llm/            Anthropic + Together adapters, retryWithSchema, prompt builders
+  cli/                agentledger CLI — Commander.js
+    src/commands/
+      init.ts         agentledger init
+      run.ts          agentledger run "<goal>" — full orchestrator loop (with approval gate)
+      tasks.ts        agentledger tasks view
+      verify.ts       agentledger verify
+      replay.ts       agentledger replay
+      resume.ts       agentledger resume <runId> — continue paused run after approval
+      approvals.ts    agentledger approvals list/approve/reject
+      handoff.ts      agentledger handoff [--brief] [--agent-prompt] [--json]
+      assign.ts       agentledger assign <runId> <taskId> <newOwner>
+      audit.ts        agentledger audit / agentledger leaderboard
+      serve.ts        agentledger serve — starts API server, owns SIGINT/SIGTERM handlers
+  plugin/             agentledger-plugin — Claude Code observer/enforcer plugin
+    hooks/
+      hooks.json        Nested hook matchers (SessionStart/PreToolUse/PostToolUse/SessionEnd)
+    scripts/
+      state.js          readSessionState / writeSessionState / clearSessionState (proper-lockfile)
+      server-manager.js ensureServerRunning() — health check + detached spawn
+      summary.js        buildSessionSummary + formatSummary (reads ledger, replayLedger)
+      hooks/
+        session-start.js  Ensure .agentledger/ + config.json; start dashboard; print summary
+        pre-tool-use.js   Layer 1: minimatch block on Edit/Write to blockedFiles; emit TOOL_DENIED
+        post-tool-use.js  Lazy run init (first Edit/Write → RUN_CREATED observed); TOOL_CALLED events
+        session-end.js    Layer 2: git diff + test command; VERIFICATION_*/RUN_*/BOUNDARY_VIOLATION
+    skills/             4 slash commands (ledger, verify, handoff, audit)
+  server/             @agentledger/server — Express HTTP API + SSE event stream
+    src/
+      services/
+        fileWatcher.ts   FileWatcher — fs.watch + 100ms debounce + line-count tracking + _reading guard
+        sseManager.ts    SSEManager — Map<id, Response>; replay on addClient(); broadcast() to all
+      routes/
+        runs.ts          GET /api/runs, GET /api/runs/:runId — replayLedger per run
+        leaderboard.ts   GET /api/leaderboard — buildLeaderboard(events)
+        events.ts        GET /api/events (SSE), GET /api/events/stats (clientCount + eventCount)
+      index.ts           createApp() factory — mounts routers, creates LedgerReader
+      server.ts          createServer() — wires FileWatcher→eventStore→SSEManager; returns {port, close}
+  visualizer/         @agentledger/visualizer — React 18 + Vite 5 SPA
+    src/
+      types.ts           Local mirrors of server response types (no core dependency)
+      context/
+        SSEContext.tsx   SSEProvider: single EventSource, Set<Listener> broadcast, connected boolean
+      hooks/
+        useSSE.ts        Subscribes via SSEContext — no direct EventSource per hook
+        useRuns.ts       fetch /api/runs + 200ms debounced SSE refetch
+        useLeaderboard.ts fetch /api/leaderboard + 200ms debounced SSE refetch
+        useEventFeed.ts  Append SSE events, cap at 100
+      components/
+        StatusBadge.tsx  Colored pill for RunStatus / TaskStatus
+        RunList.tsx      Sidebar: clickable run list
+        RunDetail.tsx    Main panel: goal, status, task list
+        TaskCard.tsx     Single task with status, owner, allowedFiles
+        EventFeed.tsx    Right panel: live scrolling event log
+        Leaderboard.tsx  Risk score table sorted by score desc
+      App.tsx            CSS Grid layout; Runs / Leaderboard tab switching
+      main.tsx           Entry: StrictMode → SSEProvider → App
+      styles/index.css   Dark theme, CSS custom properties
+  mcp-server/         agentledger-mcp — MCP server over stdio
+    src/
+      ledger.ts       Factory: getReader() / getWriter() from AGENTLEDGER_PROJECT_ROOT env
+      index.ts        McpServer + StdioServerTransport, registers 5 tools
+      tools/
+        appendEvent.ts    append_event tool
+        getTask.ts        get_task tool
+        claimTask.ts      claim_task tool
+        queryLedger.ts    query_ledger tool
+        getRunSummary.ts  get_run_summary tool
   examples/
-    todo-app/
-    github-issue-runner/
-  visualizer/    # post-MVP only
+    demo-repo/        Temptation scenario: add Redis caching, .env is BLOCKED
 ```
-
-Target repo run state lives in `.agentledger/` (created by `agentledger init`):
-```
-.agentledger/
-  config.json
-  ledger.jsonl       # the ledger — single writer, append-only
-  tasks.json         # current task graph snapshot
-  artifacts/         # structured worker outputs
-  patches/           # per-task git patches
-  worktrees/         # git worktree checkouts (active during a run)
-  runs/              # per-run metadata
-```
-
----
 
 ## Data Flow
 
 ```
-User: agentledger run "Add email validation..."
-         │
-         ▼
-    Intent Contract
-    (goal, constraints, successCriteria, riskLevel)
-         │
-         ▼
-    Planner
-    (intent → TaskGraph, validates no overlapping ownership)
-         │
-         ▼
-    Orchestrator loop (sequential in MVP):
-      for each task (in dependency order):
-        │
-        ├─ git/: createTaskWorktree(task)
-        │         → branch: agentledger/{task_id}
-        │         → sparse-checkout: task.allowedFiles
-        │
-        ├─ worker/: runWorker(task, context, worktree)
-        │         → executes inside worktree
-        │         → returns WorkerResult (structured, not self-reported success)
-        │
-        ├─ ledger/: orchestrator appends events on worker's behalf
-        │         → WORKTREE_CREATED, TASK_STARTED, TOOL_CALLED,
-        │           PATCH_PROPOSED, etc.
-        │
-        ├─ verifier/: verifyTask(task, result, worktree)
-        │         → git diff branch vs allowedFiles/blockedFiles
-        │         → run configured commands (npm test, typecheck, lint)
-        │         → real exit codes — worker self-report ignored
-        │
-        ├─ if PASS: mergeTaskBranch → output branch; emit TASK_COMPLETED
-        └─ if FAIL: emit BOUNDARY_VIOLATION or VERIFICATION_FAILED; task → failed
+User: agentledger run "add feature"
+  └─ run.ts (orchestrator)
+       ├─ LedgerWriter.appendEvent(RUN_CREATED)
+       ├─ planWithLLM / createPlan → TaskGraph
+       ├─ LedgerWriter.appendEvent(INTENT_COMPILED)
+       ├─ LedgerWriter.appendEvent(TASK_CREATED × n)
+       └─ for each task (topoSort order):
+            ├─ createTaskWorktree (git worktree + sparse-checkout)
+            ├─ LedgerWriter.appendEvent(TASK_ASSIGNED, WORKTREE_CREATED, TASK_STARTED)
+            ├─ runWorkerLLM / workerFn → WorkerResult
+            ├─ LedgerWriter.appendEvent(PATCH_PROPOSED)
+            ├─ [approval gate] shouldRequireApproval(task, workerResult, config.approvalPolicy)
+            │    └─ if required: appendEvent(HUMAN_APPROVAL_REQUESTED) → print instructions → exit
+            │       (worktree preserved; run stays "paused"; user runs `agentledger resume`)
+            ├─ verifyTask → VerificationResult
+            │    ├─ checkFileBoundaries (minimatch)
+            │    └─ runVerificationCommands (real exit codes)
+            ├─ LedgerWriter.appendEvent(BOUNDARY_VIOLATION? | VERIFICATION_PASSED/FAILED)
+            ├─ LedgerWriter.appendEvent(TASK_COMPLETED | TASK_FAILED)
+            └─ cleanupWorktree (on success only)
+       └─ LedgerWriter.appendEvent(RUN_COMPLETED | RUN_FAILED)
 
-         ▼
-    agentledger replay  →  reconstruct RunState from ledger.jsonl
+Approval resume path:
+  agentledger approvals approve <runId>
+    └─ appendEvent(HUMAN_APPROVAL_GRANTED, actor: "human")
+  agentledger resume <runId>
+    └─ resume.ts
+         ├─ replayLedger → RunState (verifies run is "paused")
+         ├─ load tasks.json for full task graph
+         └─ for each task (topoSort order):
+              ├─ completed/failed → skip
+              ├─ awaiting_approval without GRANTED → print instructions, return
+              ├─ awaiting_approval with GRANTED → reconstructWorkerResult → verifyTask → TASK_COMPLETED/FAILED
+              └─ pending/assigned → full worker + verify flow
+         └─ appendEvent(RUN_COMPLETED | RUN_FAILED)
+
+Serve path: agentledger serve
+  └─ serve.ts (CLI — owns signal handlers)
+       └─ createServer({ ledgerDir, port }) → { port, close }
+            ├─ FileWatcher(ledger.jsonl, onNewEvents)
+            │    ├─ start() — reads existing lines into eventStore via onNewEvents
+            │    └─ fs.watch → 100ms debounce → _readNewLines (line-count delta only)
+            ├─ SSEManager(eventStore) — shared reference
+            ├─ createApp({ ledgerDir, eventStore, sseManager })
+            │    ├─ GET /api/runs          → replayLedger per unique runId
+            │    ├─ GET /api/runs/:runId   → replayLedger(events, runId)
+            │    ├─ GET /api/leaderboard   → buildLeaderboard(events)
+            │    ├─ GET /api/events        → SSE; addClient on connect, removeClient on "close"
+            │    └─ GET /api/events/stats  → { clientCount, eventCount }
+            └─ listen(port || 0) → actual port via AddressInfo
+
+MCP path: agentledger-mcp (stdio)
+  └─ reads AGENTLEDGER_PROJECT_ROOT env → .agentledger/ledger.jsonl
+       ├─ append_event   → LedgerWriter.appendEvent (hash-chained)
+       ├─ get_task       → LedgerReader + replayLedger → AgentTask
+       ├─ claim_task     → replayLedger (assert pending) + TASK_ASSIGNED event
+       ├─ query_ledger   → LedgerReader.readAll + filter
+       └─ get_run_summary → replayLedger → RunState
 ```
 
----
+## Ledger Design Invariants
 
-## Module Responsibilities
+- **Single writer**: only the orchestrator (or MCP `append_event`) appends to `ledger.jsonl`
+- **Hash chaining**: every event carries `hash = SHA256(previous_hash + payload)` — tamper-evident
+- **Append-only**: events are never deleted or modified; `replayLedger` reconstructs state
+- **Sequential execution (MVP)**: tasks run in dependency order; no parallel workers in v1
 
-### `core/ledger`
-- Append events (orchestrator only — workers never write directly)
-- Compute `hash = SHA-256(previous_hash + JSON.stringify(event_payload))`
-- Verify chain integrity
-- Query by run_id / task_id / event_type
-- Replay: reduce event log → RunState
+## Isolation Layers
 
-Key functions:
-```typescript
-appendEvent(event: Omit<LedgerEvent, 'hash'>): Promise<void>
-readEvents(runId?: string): Promise<LedgerEvent[]>
-replayRun(runId: string): Promise<RunState>
-verifyChain(runId: string): Promise<boolean>
-```
+1. **Prevention**: git worktree + `sparse-checkout` scopes each worker to `allowedFiles`
+2. **Detection**: verifier diffs the worktree against `allowedFiles`/`blockedFiles` post-execution — independent of worker self-report
 
-### `core/git`
-- Create per-task worktree + branch (`agentledger/{task_id}`)
-- Apply sparse-checkout to `allowedFiles` (best-effort prevention layer)
-- Diff worktree branch against declared boundaries (authoritative detection layer)
-- Merge accepted branch into run's output branch
-- Clean up worktrees on completion or failure
+## MCP Server
 
-Key functions:
-```typescript
-createTaskWorktree(task: AgentTask): Promise<WorktreeHandle>
-diffWorktree(handle: WorktreeHandle): Promise<string[]>   // returns modified file paths
-mergeTaskBranch(handle: WorktreeHandle, targetBranch: string): Promise<void>
-cleanupWorktree(handle: WorktreeHandle): Promise<void>
-```
-
-### `core/planner`
-- Parse intent into structured TaskGraph
-- Validate: no dependency cycles, no overlapping `allowedFiles` between parallel tasks
-- Write `TASK_CREATED` events per task
-- MVP: rule-based or LLM-assisted; mocked is acceptable
-
-Key functions:
-```typescript
-createPlan(intent: IntentContract): Promise<TaskGraph>
-validateTaskGraph(graph: TaskGraph): ValidationResult
-```
-
-### `core/worker`
-- Receives: task + context + worktree handle + allowed tools list
-- Executes inside worktree (reads/edits only files in the worktree checkout)
-- Returns structured `WorkerResult` — no side-channel success claims
-- Does NOT write to the ledger — returns result to orchestrator
-
-Key functions:
-```typescript
-runWorker(task: AgentTask, context: WorkerContext, worktree: WorktreeHandle): Promise<WorkerResult>
-```
-
-### `core/verifier`
-- Layer 1: diff `worktree.branch` vs `task.allowedFiles` + `task.blockedFiles`
-- Layer 2: run `config.verification.commands` — capture stdout/stderr/exitCode
-- Emit `BOUNDARY_VIOLATION` or `VERIFICATION_FAILED` on failure
-- Never use worker's self-reported status as input
-
-Key functions:
-```typescript
-verifyTask(task: AgentTask, result: WorkerResult, worktree: WorktreeHandle): Promise<VerificationResult>
-checkFileBoundaries(task: AgentTask, modifiedFiles: string[]): BoundaryCheckResult
-runVerificationCommands(commands: VerificationCommand[]): Promise<CommandResult[]>
-```
-
-### `core/replay`
-- Reduce `LedgerEvent[]` → `RunState` (task statuses, run status, file modifications)
-- Detect invalid state transitions (e.g., `completed` → `running`)
-- Used by `agentledger replay` CLI command
-
----
-
-## Key Design Decisions + Why
-
-### Single-writer ledger
-Workers return results to the orchestrator. The orchestrator appends all events. This sidesteps file-locking and concurrent-write problems for sequential MVP. When parallel execution ships, this changes to an append queue — but not in v1.
-
-### Hash chaining is mandatory in MVP
-`hash = SHA-256(previous_hash + serialized_payload)`. Without this, the ledger is a structured log, not an immutable audit log. The project's credibility claim ("immutable") is only defensible if the chain is there. Not optional.
-
-### Two isolation layers
-Sparse-checkout gives physical prevention (imperfect — a worker with shell access can escape). Verifier diff gives independent detection. Both are required; neither alone is sufficient. This is analogous to defense-in-depth in security.
-
-### Sequential execution for MVP
-Parallel workers require: concurrent-safe ledger writes, confirming worktree isolation holds under concurrent git object store access, merge conflict resolution between task branches. None of this is necessary to prove the thesis. Ship sequential, design the interfaces so parallel can be layered in.
-
-### allowedTools is audit-only
-An LLM worker with shell access cannot be technically prevented from calling tools outside `allowedTools`. Sparse-checkout handles files; nothing handles tool calls at the process level. The verifier audits ledger events post-hoc. The README must say this explicitly — "detection, not prevention" — or it's a dishonest claim.
-
-### Planner is intentionally thin
-The harness is the engineering story. A mediocre planner + strong harness = reliable results. A brilliant planner + no harness = unreliable results. Do not let planner complexity dominate Phase 1-6 build time.
+- Transport: **stdio only** — no HTTP, no hosting
+- Env: `AGENTLEDGER_PROJECT_ROOT` → locates `.agentledger/ledger.jsonl`
+- Published as: `agentledger-mcp` on npm
+- All tool I/O validated with Zod (reusing `@agentledger/core` schemas)
+- No ledger logic duplicated — pure import from `@agentledger/core`
