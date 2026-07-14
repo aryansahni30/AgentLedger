@@ -1,0 +1,20 @@
+{
+  "name": "agentledger-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AgentLedger Claude Code plugin — observer/enforcer mode",
+  "scripts": {
+    "build": "echo 'No build step — plain ESM scripts'",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "@agentledger/core": "workspace:*",
+    "@agentledger/server": "workspace:*",
+    "minimatch": "^10.2.5",
+    "proper-lockfile": "^4.1.2"
+  }
+}

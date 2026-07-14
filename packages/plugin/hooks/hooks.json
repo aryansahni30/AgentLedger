@@ -1,0 +1,53 @@
+{
+  "description": "AgentLedger plugin — observer/enforcer mode. Records file writes to a hash-chained ledger, blocks writes to protected files (PreToolUse), detects Bash boundary violations at session end (git diff), and runs tests at SessionEnd.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/session-start.js",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/pre-tool-use.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/post-tool-use.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/session-end.js",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
