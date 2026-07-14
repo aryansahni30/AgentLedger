@@ -166,7 +166,9 @@ describe("replayLedger — basic state reconstruction", () => {
     const state = replayLedger(events, RUN_ID);
     expect(state.filesModified).toContain("src/index.ts");
     expect(state.filesModified).toContain("src/utils.ts");
-    expect(state.tasks[0]!.status).toBe("awaiting_verification");
+    // Task stays "running" after PATCH_PROPOSED — the next event
+    // (HUMAN_APPROVAL_REQUESTED or VERIFICATION_STARTED) decides the path.
+    expect(state.tasks[0]!.status).toBe("running");
   });
 
   it("marks task completed on VERIFICATION_PASSED", () => {

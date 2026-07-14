@@ -4,7 +4,15 @@ import { existsSync } from "fs";
 import type Anthropic from "@anthropic-ai/sdk";
 import { getAnthropicClient } from "./client.js";
 import { buildWorkerSystemPrompt, buildWorkerUserMessage } from "./prompts/worker.js";
-import { WorkerResultSchema, type WorkerContext, type WorkerResult } from "../schemas/index.js";
+import {
+  WorkerResultSchema,
+  type WorkerContext,
+  type WorkerResult,
+  type ToolDenial,
+  type PriorTaskContext,
+} from "../schemas/index.js";
+import { LedgerWriter } from "../ledger/LedgerWriter.js";
+import { checkWritePermission } from "./writeBoundaryGuard.js";
 
 export const DEFAULT_WORKER_MODEL = "claude-sonnet-4-6";
 const MAX_TOOL_CALLS = 40;
@@ -87,6 +95,14 @@ interface ReadFileInput { path: string }
 interface WriteFileInput { path: string; content: string }
 interface TaskCompleteInput { summary: string; filesModified: string[] }
 
+// ─── Ledger opts for real-time TOOL_DENIED emission ──────────────────────────
+
+export interface WorkerLedgerOpts {
+  writer: LedgerWriter;
+  runId: string;
+  taskId: string;
+}
+
 // ─── Tool execution ───────────────────────────────────────────────────────────
 
 function safeRelativePath(worktreePath: string, rawPath: string): string {
@@ -124,8 +140,43 @@ async function execWriteFile(
   worktreePath: string,
   input: WriteFileInput,
   filesWritten: Set<string>,
+  allowedFiles: string[],
+  blockedFiles: string[],
+  toolDenials: ToolDenial[],
+  ledgerOpts?: WorkerLedgerOpts,
 ): Promise<string> {
   const rel = safeRelativePath(worktreePath, input.path);
+
+  const permission = checkWritePermission(rel, allowedFiles, blockedFiles);
+  if (permission.denied) {
+    const denial: ToolDenial = {
+      toolName: "write_file",
+      path: rel,
+      reason: permission.reason,
+      violationType: permission.violationType,
+    };
+    toolDenials.push(denial);
+
+    if (ledgerOpts) {
+      await ledgerOpts.writer.appendEvent({
+        event_id: LedgerWriter.createEventId(),
+        run_id: ledgerOpts.runId,
+        task_id: ledgerOpts.taskId,
+        timestamp: new Date().toISOString(),
+        actor: "worker",
+        event_type: "TOOL_DENIED",
+        payload: {
+          toolName: "write_file",
+          path: rel,
+          reason: permission.reason,
+          violationType: permission.violationType,
+        },
+      });
+    }
+
+    return permission.reason;
+  }
+
   const abs = join(worktreePath, rel);
   await mkdir(dirname(abs), { recursive: true });
   await writeFile(abs, input.content, "utf8");
@@ -139,20 +190,27 @@ async function execWriteFile(
  * Runs the LLM worker tool loop. The model reads the repo, makes changes,
  * and calls `task_complete` to finish. Returns a WorkerResult.
  *
- * This is the "temptation" moment: the model may attempt to write to blocked
- * files (the demo scenario). Those writes actually happen — the verifier
- * catches them independently via git diff.
+ * Phase B: write_file attempts are boundary-checked BEFORE disk write.
+ * Blocked writes are denied immediately, emitting a TOOL_DENIED event to the
+ * ledger in real-time (if ledgerOpts provided). The model sees the denial
+ * message and can course-correct within the same task.
+ *
+ * The post-hoc verifier still runs independently — prevention + detection
+ * are both required.
  */
 export async function runWorkerLLM(
   context: WorkerContext,
   model = DEFAULT_WORKER_MODEL,
+  ledgerOpts?: WorkerLedgerOpts,
+  priorContext?: PriorTaskContext[],
 ): Promise<WorkerResult> {
   const { task, worktreePath } = context;
   const client = getAnthropicClient();
 
-  const systemPrompt = buildWorkerSystemPrompt(task);
+  const systemPrompt = buildWorkerSystemPrompt(task, priorContext);
   const filesWritten = new Set<string>();
   const filesRead: string[] = [];
+  const toolDenials: ToolDenial[] = [];
 
   const messages: Anthropic.MessageParam[] = [
     { role: "user", content: buildWorkerUserMessage(task) },
@@ -202,6 +260,10 @@ export async function runWorkerLLM(
             worktreePath,
             block.input as WriteFileInput,
             filesWritten,
+            task.allowedFiles,
+            task.blockedFiles,
+            toolDenials,
+            ledgerOpts,
           );
         } else if (block.name === "task_complete") {
           taskCompleteResult = block.input as TaskCompleteInput;
@@ -240,11 +302,13 @@ export async function runWorkerLLM(
     filesRead,
     filesModified: reportedModified,
     worktreeBranch: `agentledger/${task.taskId}`,
+    toolDenials,
     output: {
       taskCompleted: taskCompleteResult !== null,
       toolCallCount,
       selfReportedFilesModified: reportedModified,
       actualFilesWritten: [...filesWritten],
+      toolDenialCount: toolDenials.length,
     },
   });
 }

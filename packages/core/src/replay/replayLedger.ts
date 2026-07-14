@@ -10,9 +10,10 @@ import { RunStateSchema } from "../schemas/index.js";
 // Valid forward-only status transitions for a run
 const VALID_RUN_TRANSITIONS: Record<RunStatus, RunStatus[]> = {
   created: ["planning", "failed"],
-  planning: ["executing", "failed"],
-  executing: ["verifying", "completed", "failed"],
-  verifying: ["executing", "completed", "failed"],
+  planning: ["executing", "completed", "failed"],
+  executing: ["verifying", "paused", "completed", "failed"],
+  verifying: ["executing", "paused", "completed", "failed"],
+  paused: ["executing", "failed"],
   completed: [],
   failed: [],
 };
@@ -21,7 +22,8 @@ const VALID_RUN_TRANSITIONS: Record<RunStatus, RunStatus[]> = {
 const VALID_TASK_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   pending: ["assigned", "failed"],
   assigned: ["running", "failed"],
-  running: ["awaiting_verification", "completed", "failed"],
+  running: ["awaiting_approval", "awaiting_verification", "completed", "failed"],
+  awaiting_approval: ["awaiting_verification", "failed"],
   awaiting_verification: ["completed", "failed"],
   completed: [],
   failed: [],
@@ -82,6 +84,7 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
   // Mutable working state — only mutated inside this function
   let status: RunStatus = "created";
   let goal = "";
+  let operator: string | undefined;
   let startedAt: string | undefined;
   let completedAt: string | undefined;
   const tasks = new Map<string, AgentTask>();
@@ -97,6 +100,7 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
       case "RUN_CREATED": {
         status = "created";
         goal = typeof payload["goal"] === "string" ? payload["goal"] : "";
+        operator = typeof payload["operator"] === "string" ? payload["operator"] : undefined;
         startedAt = timestamp;
         break;
       }
@@ -147,7 +151,10 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
           const task = tasks.get(taskId);
           if (task) {
             assertTaskTransition(taskId, task.status, "assigned", i, event_type);
-            tasks.set(taskId, { ...task, status: "assigned" });
+            // Carry new owner from payload so reassignment is visible in replay
+            const newOwner =
+              typeof payload["owner"] === "string" ? payload["owner"] : task.owner;
+            tasks.set(taskId, { ...task, status: "assigned", owner: newOwner });
           }
         }
         break;
@@ -178,10 +185,36 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
             }
           }
         }
+        // PATCH_PROPOSED transitions to awaiting_approval if approval is needed,
+        // otherwise directly to awaiting_verification. The orchestrator decides
+        // which event fires next: HUMAN_APPROVAL_REQUESTED or VERIFICATION_STARTED.
+        // Replay leaves the task in "running" until one of those events arrives.
+        break;
+      }
+
+      case "HUMAN_APPROVAL_REQUESTED": {
+        if (status === "executing" || status === "verifying") {
+          status = "paused";
+        }
         const taskId = event.task_id ?? (typeof payload["taskId"] === "string" ? payload["taskId"] : undefined);
         if (taskId) {
           const task = tasks.get(taskId);
-          if (task) {
+          if (task && task.status === "running") {
+            assertTaskTransition(taskId, task.status, "awaiting_approval", i, event_type);
+            tasks.set(taskId, { ...task, status: "awaiting_approval" });
+          }
+        }
+        break;
+      }
+
+      case "HUMAN_APPROVAL_GRANTED": {
+        if (status === "paused") {
+          status = "executing";
+        }
+        const taskId = event.task_id ?? (typeof payload["taskId"] === "string" ? payload["taskId"] : undefined);
+        if (taskId) {
+          const task = tasks.get(taskId);
+          if (task && task.status === "awaiting_approval") {
             assertTaskTransition(taskId, task.status, "awaiting_verification", i, event_type);
             tasks.set(taskId, { ...task, status: "awaiting_verification" });
           }
@@ -189,10 +222,27 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
         break;
       }
 
+      case "HUMAN_APPROVAL_REJECTED": {
+        const taskId = event.task_id ?? (typeof payload["taskId"] === "string" ? payload["taskId"] : undefined);
+        if (taskId) {
+          const task = tasks.get(taskId);
+          if (task && task.status === "awaiting_approval") {
+            assertTaskTransition(taskId, task.status, "failed", i, event_type);
+            tasks.set(taskId, { ...task, status: "failed" });
+          }
+        }
+        break;
+      }
+
       case "VERIFICATION_STARTED": {
         if (status !== "verifying") {
-          assertRunTransition(status, "verifying", i, event_type);
-          status = "verifying";
+          // Run may be "executing" or "paused" (approval just granted) entering verification
+          if (status === "paused") {
+            status = "verifying";
+          } else {
+            assertRunTransition(status, "verifying", i, event_type);
+            status = "verifying";
+          }
         }
         break;
       }
@@ -220,8 +270,9 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
         const taskId = event.task_id ?? (typeof payload["taskId"] === "string" ? payload["taskId"] : undefined);
         if (taskId) {
           const task = tasks.get(taskId);
-          // Idempotent: multiple failure events (BV + VF + TASK_FAILED) can fire for one task
-          if (task && task.status !== "failed") {
+          // Idempotent: skip if task already in a terminal state.
+          // BV/VF events may be recorded after task completion for audit purposes.
+          if (task && task.status !== "failed" && task.status !== "completed") {
             assertTaskTransition(taskId, task.status, "failed", i, event_type);
             tasks.set(taskId, { ...task, status: "failed" });
           }
@@ -247,8 +298,8 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
       case "WORKTREE_CREATED":
       case "CONTEXT_READ":
       case "TOOL_CALLED":
+      case "TOOL_DENIED":
       case "FILE_EDIT_PROPOSED":
-      case "HUMAN_APPROVAL_REQUESTED":
         break;
     }
   }
@@ -257,6 +308,7 @@ export function replayLedger(events: LedgerEvent[], runId: string): RunState {
     runId,
     status,
     goal,
+    operator,
     tasks: Array.from(tasks.values()),
     filesModified,
     startedAt,

@@ -1,13 +1,19 @@
-import type { AgentTask } from "../../schemas/index.js";
+import type { AgentTask, PriorTaskContext } from "../../schemas/index.js";
+import { formatPriorContextForPrompt } from "./priorContextBuilder.js";
 
-export function buildWorkerSystemPrompt(task: AgentTask): string {
+export function buildWorkerSystemPrompt(task: AgentTask, priorContext?: PriorTaskContext[]): string {
+  const priorContextBlock =
+    priorContext && priorContext.length > 0
+      ? `\n${formatPriorContextForPrompt(priorContext)}\n`
+      : "";
+
   return `You are an expert software engineer executing a single, scoped task inside an isolated git worktree.
 
 Your task:
   Title: ${task.title}
   Description: ${task.description}
   Success criteria: ${task.successCriteria.join(", ")}
-
+${priorContextBlock}
 Tools available to you:
   - list_directory(path): List files in a directory
   - read_file(path): Read a file's content

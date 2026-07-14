@@ -9,12 +9,29 @@ const GENESIS_HASH = "genesis";
 
 export class LedgerWriter {
   private readonly ledgerPath: string;
+  /** Serial promise queue — ensures concurrent callers never interleave read-then-write */
+  private _writeQueue: Promise<void> = Promise.resolve();
 
   constructor(ledgerPath: string) {
     this.ledgerPath = ledgerPath;
   }
 
   async appendEvent(
+    event: Omit<LedgerEvent, "hash" | "previous_hash">,
+  ): Promise<LedgerEvent> {
+    return new Promise<LedgerEvent>((resolve, reject) => {
+      this._writeQueue = this._writeQueue.then(async () => {
+        try {
+          const result = await this._appendEventUnsafe(event);
+          resolve(result);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+  }
+
+  private async _appendEventUnsafe(
     event: Omit<LedgerEvent, "hash" | "previous_hash">,
   ): Promise<LedgerEvent> {
     await this.ensureLedgerExists();
