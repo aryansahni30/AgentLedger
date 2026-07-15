@@ -18,8 +18,9 @@
 
 import fs from "fs";
 import path from "path";
+import { randomUUID } from "crypto";
 import { minimatch } from "minimatch";
-import { readSessionState } from "../state.js";
+import { readSessionState, writeSessionState } from "../state.js";
 
 const projectDir = process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
 const configPath = path.join(projectDir, ".agentledger", "config.json");
@@ -61,8 +62,61 @@ function matchesBlocked(filePath, patterns) {
   return null;
 }
 
+/** @returns {string} */
+function loadOperator() {
+  try {
+    const raw = fs.readFileSync(configPath, "utf8");
+    const config = JSON.parse(raw);
+    return config.operator || process.env["USER"] || "unknown";
+  } catch {
+    return process.env["USER"] ?? "unknown";
+  }
+}
+
 /**
- * Append a TOOL_DENIED event to the ledger if a run is active.
+ * Initialize a new observed run — writes RUN_CREATED + INTENT_COMPILED events.
+ * Same pattern as post-tool-use.js lazy init.
+ *
+ * @param {string} runId
+ * @returns {Promise<void>}
+ */
+async function initRun(runId) {
+  const { LedgerWriter } = await import("@agentledger/core");
+  const writer = new LedgerWriter(ledgerPath);
+  const operator = loadOperator();
+
+  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+
+  await writer.appendEvent({
+    event_id: `evt_${Date.now()}_run_created`,
+    run_id: runId,
+    timestamp: new Date().toISOString(),
+    actor: "plugin:pre-tool-use",
+    event_type: "RUN_CREATED",
+    payload: {
+      goal: "Observed Claude Code session",
+      operator,
+      run_mode: "observed",
+    },
+  });
+
+  await writer.appendEvent({
+    event_id: `evt_${Date.now()}_intent`,
+    run_id: runId,
+    timestamp: new Date().toISOString(),
+    actor: "plugin:pre-tool-use",
+    event_type: "INTENT_COMPILED",
+    payload: {
+      goal: "Observed Claude Code session",
+      taskCount: 0,
+      tasks: [],
+    },
+  });
+}
+
+/**
+ * Append a TOOL_DENIED event to the ledger.
+ * If no run is active, lazy-inits one first (same as post-tool-use).
  * LedgerWriter computes hash/previous_hash internally — do not pass them.
  *
  * @param {string} filePath
@@ -70,8 +124,15 @@ function matchesBlocked(filePath, patterns) {
  * @param {string} toolName
  */
 async function emitDenied(filePath, matchedPattern, toolName) {
-  const state = await readSessionState();
-  if (!state.runId) return; // No active run — skip ledger write
+  let state = await readSessionState();
+
+  // Lazy run init if no active run
+  if (!state.runId) {
+    const runId = randomUUID();
+    await initRun(runId);
+    state = { ...state, runId, dirty: true };
+    await writeSessionState(state);
+  }
 
   try {
     const { LedgerWriter } = await import("@agentledger/core");
@@ -87,7 +148,6 @@ async function emitDenied(filePath, matchedPattern, toolName) {
         tool: toolName,
         file_path: filePath,
         matched_pattern: matchedPattern,
-        decision: "denied",
       },
     });
   } catch (err) {
@@ -124,12 +184,12 @@ async function main() {
   // Block the write
   const reason = `[AgentLedger] Write to "${path.basename(filePath)}" blocked — matches protected pattern "${matched}"`;
 
-  // Emit denial to ledger (best-effort)
+  // Emit denial to ledger (lazy-inits run if needed)
   await emitDenied(filePath, matched, toolName);
 
-  // Output block decision for Claude Code
-  console.log(JSON.stringify({ decision: "block", reason }));
-  process.exit(0);
+  // Exit code 2 = block; reason on stderr for Claude Code
+  process.stderr.write(reason + "\n");
+  process.exit(2);
 }
 
 main().catch((err) => {

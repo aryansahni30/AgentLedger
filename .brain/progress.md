@@ -2,8 +2,8 @@
 
 ## Current Status
 
-**Phase:** E (React + Vite visualizer) complete — 5 visualizer tests + 511 total tests passing  
-**Last updated:** 2026-07-09
+**Phase:** Plugin hardening complete — verify dual-mode, pre-tool-use exit-code-2 protocol, skill rewrites  
+**Last updated:** 2026-07-15
 
 ---
 
@@ -212,13 +212,15 @@
 - [x] `scripts/server-manager.js` — `ensureServerRunning()` — GET /health, spawn detached if not up, poll 2s max; non-fatal
 - [x] `scripts/summary.js` — `buildSessionSummary(projectDir)` reads ledger + verifyChain + replayLedger; `formatSummary()` formats compact console block
 - [x] `scripts/hooks/session-start.js` — ensure `.agentledger/` + default `config.json`; start dashboard (non-blocking); print summary
-- [x] `scripts/hooks/pre-tool-use.js` — Layer 1: minimatch block on Edit/Write to `blockedFiles`; emits TOOL_DENIED event; outputs `{ decision: "block", reason }` JSON
+- [x] `scripts/hooks/pre-tool-use.js` — Layer 1: minimatch block on Edit/Write to `blockedFiles`; emits TOOL_DENIED event (with `file_path` + `matched_pattern`); exits code 2 (Claude Code block protocol); lazy-inits observed run if none active
 - [x] `scripts/hooks/post-tool-use.js` — lazy run init on first Edit/Write (RUN_CREATED observed + INTENT_COMPILED); records TOOL_CALLED for Edit/Write/Bash
 - [x] `scripts/hooks/session-end.js` — Layer 2: git diff boundary check + test command run; emits BOUNDARY_VIOLATION / VERIFICATION_PASSED/FAILED / RUN_COMPLETED/FAILED; clears session state
 - [x] `hooks/hooks.json` — nested object format mirroring settings.json; SessionStart/PreToolUse(Edit|Write)/PostToolUse(Edit|Write|Bash)/SessionEnd
-- [x] `skills/ledger.md`, `skills/verify.md`, `skills/handoff.md`, `skills/audit.md` — 4 slash commands
+- [x] `skills/ledger.md`, `skills/verify.md`, `skills/handoff.md`, `skills/audit.md` — 4 slash commands; rewritten as proper SKILL.md with YAML frontmatter, delegating to CLI commands
 - [x] `PLUGIN_README.md` — install command, enforcement gap documented, config.json reference
 - [x] `pnpm install` confirms workspace recognition; 4 dependencies resolved
+- [x] `packages/cli/src/commands/verify.ts` — dual-mode: orchestrator (tasks.json exists) vs observed (no tasks.json); observed mode checks `blockedFiles` + `testCommand` from plugin-style config.json against cwd
+- [x] 7 pre-tool-use tests updated + 1 new lazy-init test — all passing
 
 ### Phase 10: MCP Server ✅
 - [x] `packages/mcp-server/` — new workspace package, publishable as `agentledger-mcp` on npm
