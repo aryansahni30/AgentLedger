@@ -4,22 +4,21 @@
  *
  * Responsibilities:
  *   1. If no active run (session.json has no runId or dirty=false) → exit cleanly
- *   2. Run git diff to detect any Bash-originated file changes (Layer 2 boundary check)
- *   3. Run configured test command and capture exit code
- *   4. Emit VERIFICATION_PASSED or VERIFICATION_FAILED
- *   5. Emit RUN_COMPLETED or RUN_FAILED
+ *   2. Run verification via shared verifier (git diff + test command)
+ *   3. Emit VERIFICATION_PASSED or VERIFICATION_FAILED
+ *   4. Emit RUN_COMPLETED or RUN_FAILED
+ *   5. Merge session stats into persistent stats.json
  *   6. Clear session state
- *   7. Print a compact summary to stdout
+ *   7. Print enhanced summary with trust delta
  *
  * LedgerWriter.appendEvent computes hash/previous_hash internally.
  */
 
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
-import { minimatch } from "minimatch";
 import { readSessionState, clearSessionState } from "../state.js";
 import { readStats, mergeSessionStats } from "../stats.js";
+import { verify } from "../verifier.js";
 
 const projectDir = process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
 const ledgerPath = path.join(projectDir, ".agentledger", "ledger.jsonl");
@@ -40,73 +39,6 @@ function loadConfig() {
     return {
       blockedFiles: ["**/.env", "**/secrets.*", "**/*.pem", "**/*.key"],
       testCommand: "npm test",
-    };
-  }
-}
-
-/**
- * Returns list of files changed in this git session (vs HEAD).
- * @returns {string[]}
- */
-function getChangedFiles() {
-  try {
-    const output = execSync("git diff --name-only HEAD", {
-      cwd: projectDir,
-      encoding: "utf8",
-      timeout: 5000,
-    });
-    return output
-      .split("\n")
-      .map((f) => f.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * @param {string[]} changedFiles
- * @param {string[]} blockedPatterns
- * @returns {{ file: string, pattern: string }[]}
- */
-function detectBoundaryViolations(changedFiles, blockedPatterns) {
-  const violations = [];
-  for (const file of changedFiles) {
-    for (const pattern of blockedPatterns) {
-      if (
-        minimatch(file, pattern, { dot: true }) ||
-        minimatch(path.basename(file), pattern.replace(/\*\*\//, ""), { dot: true })
-      ) {
-        violations.push({ file, pattern });
-        break;
-      }
-    }
-  }
-  return violations;
-}
-
-/**
- * Run the test command and return exit code.
- * @param {string} testCommand
- * @returns {{ exitCode: number, stdout: string, stderr: string }}
- */
-function runTests(testCommand) {
-  if (!testCommand) {
-    return { exitCode: 0, stdout: "(skipped — testCommand is empty)", stderr: "" };
-  }
-  try {
-    const stdout = execSync(testCommand, {
-      cwd: projectDir,
-      encoding: "utf8",
-      timeout: 120_000,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    return { exitCode: 0, stdout, stderr: "" };
-  } catch (err) {
-    return {
-      exitCode: err.status ?? 1,
-      stdout: err.stdout ?? "",
-      stderr: err.stderr ?? "",
     };
   }
 }
@@ -146,32 +78,25 @@ async function main() {
   const { blockedFiles, testCommand } = loadConfig();
   const runId = state.runId;
 
-  // Layer 2: git diff boundary check
-  const changedFiles = getChangedFiles();
-  const violations = detectBoundaryViolations(changedFiles, blockedFiles);
+  // Run verification using shared verifier module
+  console.log(`\n[agentledger] Running: ${testCommand || "(skipped)"}`);
+  const result = verify({ testCommand, blockedFiles, projectDir });
+  const { violations, testExitCode, testsPassed, boundaryClean } = result;
+  const verificationPassed = testsPassed && boundaryClean;
 
-  let verificationPassed = true;
+  // Build reason string for failed verification
   let verificationReason = "";
-
-  if (violations.length > 0) {
-    verificationPassed = false;
+  if (!boundaryClean) {
     verificationReason = `BOUNDARY_VIOLATION: ${violations.map((v) => v.file).join(", ")}`;
-
     await appendEvent(runId, "BOUNDARY_VIOLATION", {
       violations: violations.map((v) => ({ file: v.file, matched_pattern: v.pattern })),
       detected_by: "git-diff",
     });
   }
-
-  // Run test command
-  console.log(`\n[agentledger] Running: ${testCommand || "(skipped)"}`);
-  const testResult = runTests(testCommand);
-
-  if (testResult.exitCode !== 0) {
-    verificationPassed = false;
+  if (!testsPassed) {
     verificationReason = verificationReason
-      ? `${verificationReason}; TESTS_FAILED (exit ${testResult.exitCode})`
-      : `TESTS_FAILED (exit ${testResult.exitCode})`;
+      ? `${verificationReason}; TESTS_FAILED (exit ${testExitCode})`
+      : `TESTS_FAILED (exit ${testExitCode})`;
   }
 
   // Emit verification event
@@ -184,7 +109,7 @@ async function main() {
   } else {
     await appendEvent(runId, "VERIFICATION_FAILED", {
       test_command: testCommand,
-      exit_code: testResult.exitCode,
+      exit_code: testExitCode,
       boundary_violations: violations.length,
       reason: verificationReason,
     });
@@ -194,12 +119,12 @@ async function main() {
   if (verificationPassed) {
     await appendEvent(runId, "RUN_COMPLETED", {
       summary: "Observed session completed — all checks passed",
-      files_changed: changedFiles.length,
+      files_changed: 0,
     });
   } else {
     await appendEvent(runId, "RUN_FAILED", {
       reason: verificationReason,
-      files_changed: changedFiles.length,
+      files_changed: 0,
     });
   }
 
@@ -246,7 +171,7 @@ async function main() {
   } else {
     console.log("  Boundary   : ✓ clean");
   }
-  console.log(`  Tests      : exit ${testResult.exitCode}`);
+  console.log(`  Tests      : exit ${testExitCode}`);
   console.log(`  Read:Edit  : ${readEditRatio}x (${readEditLabel})`);
 
   if (trustBefore !== null) {
