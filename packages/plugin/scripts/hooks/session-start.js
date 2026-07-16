@@ -21,7 +21,9 @@ const configPath = path.join(agentledgerDir, "config.json");
 /** Default plugin config written on first run */
 const DEFAULT_CONFIG = {
   blockedFiles: ["**/.env", "**/secrets.*", "**/*.pem", "**/*.key"],
+  warnFiles: ["**/migrations/**", "**/auth/**", "package.json", "**/middleware.*"],
   testCommand: "npm test",
+  claimDetection: true,
   operator: "",
 };
 
@@ -37,10 +39,25 @@ async function main() {
   // 3. Start dashboard (non-blocking — failure is non-fatal)
   ensureServerRunning().catch(() => {});
 
-  // 4. Print ledger summary
+  // 4. Small delay so AgentLedger banner renders after other plugin banners
+  await new Promise((r) => setTimeout(r, 100));
+
+  // 5. Write ledger summary as SessionStart additional context
+  //    Claude Code SessionStart hooks must output a JSON envelope on stdout
+  //    for content to appear in the model's context block:
+  //    {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}
+  //    Raw text on stdout only appears as a transient "hook success" message.
   try {
     const summary = await buildSessionSummary(projectDir);
-    console.log(formatSummary(summary));
+    const banner = formatSummary(summary);
+    const payload = JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: banner,
+      },
+      systemMessage: banner,
+    });
+    process.stdout.write(payload);
   } catch (err) {
     // Non-fatal — session continues regardless
     console.error("[agentledger] Warning: could not build summary:", err?.message);

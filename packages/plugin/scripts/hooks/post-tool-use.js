@@ -98,8 +98,8 @@ async function main() {
   const toolName = input?.tool_name ?? "";
   const toolInput = input?.tool_input ?? {};
 
-  // Only record Edit, Write, Bash
-  const TRACKED_TOOLS = new Set(["Edit", "Write", "Bash"]);
+  // Track Edit, Write, Bash, and Read
+  const TRACKED_TOOLS = new Set(["Edit", "Write", "Bash", "Read"]);
   if (!TRACKED_TOOLS.has(toolName)) {
     process.exit(0);
   }
@@ -111,10 +111,56 @@ async function main() {
     const runId = randomUUID();
     await initRun(runId);
     state = { ...state, runId, dirty: true };
+  }
+
+  // Track file operations in session state
+  const filePath = toolInput.file_path ?? "";
+  let stateChanged = false;
+
+  if (toolName === "Read" && filePath) {
+    const filesRead = state.filesRead ?? [];
+    if (!filesRead.includes(filePath)) {
+      state = { ...state, filesRead: [...filesRead, filePath] };
+      stateChanged = true;
+    }
+    state = { ...state, reads: (state.reads ?? 0) + 1 };
+    stateChanged = true;
+  }
+
+  if ((toolName === "Edit" || toolName === "Write") && filePath) {
+    const filesEdited = state.filesEdited ?? [];
+    if (!filesEdited.includes(filePath)) {
+      state = { ...state, filesEdited: [...filesEdited, filePath] };
+      stateChanged = true;
+    }
+    // Detect edit-without-read
+    const filesRead = state.filesRead ?? [];
+    const editWithoutRead = state.editWithoutRead ?? [];
+    if (!filesRead.includes(filePath) && !editWithoutRead.includes(filePath)) {
+      state = { ...state, editWithoutRead: [...editWithoutRead, filePath] };
+      process.stderr.write(`⚠ AgentLedger: ${toolName} on ${path.basename(filePath)} without reading it first\n`);
+      stateChanged = true;
+    }
+    const key = toolName === "Edit" ? "edits" : "writes";
+    state = { ...state, [key]: (state[key] ?? 0) + 1 };
+    stateChanged = true;
+  }
+
+  if (toolName === "Bash") {
+    state = { ...state, bashCalls: (state.bashCalls ?? 0) + 1 };
+    stateChanged = true;
+  }
+
+  if (!state.dirty) {
+    state = { ...state, dirty: true };
+    stateChanged = true;
+  }
+
+  if (stateChanged) {
     await writeSessionState(state);
   }
 
-  // No active run (first tool was Bash, not Edit/Write) — skip recording
+  // No active run — skip ledger recording (Read-only sessions don't need a run)
   if (!state.runId) {
     process.exit(0);
   }
@@ -122,7 +168,7 @@ async function main() {
   // Build TOOL_CALLED payload
   const payload = {
     tool: toolName,
-    ...(toolInput.file_path ? { file_path: toolInput.file_path } : {}),
+    ...(filePath ? { file_path: filePath } : {}),
     ...(toolInput.command ? { command: toolInput.command.slice(0, 200) } : {}),
     timestamp: new Date().toISOString(),
   };
@@ -139,11 +185,6 @@ async function main() {
       event_type: "TOOL_CALLED",
       payload,
     });
-
-    // Update dirty flag if not already set
-    if (!state.dirty) {
-      await writeSessionState({ ...state, dirty: true });
-    }
   } catch (err) {
     console.error("[agentledger] Warning: could not write TOOL_CALLED event:", err?.message);
   }

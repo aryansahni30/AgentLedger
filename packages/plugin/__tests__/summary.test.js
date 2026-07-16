@@ -4,6 +4,22 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { buildSessionSummary, formatSummary } from "../scripts/summary.js";
 
+/** Default empty stats for test fixtures */
+const emptyStats = {
+  version: 1,
+  totalClaims: 0, verifiedTrue: 0, verifiedFalse: 0, unverifiable: 0,
+  trustScore: 0, totalBlocks: 0, totalWarnings: 0, sessionsTracked: 0,
+  filesReadTotal: 0, filesEditedTotal: 0, readEditRatio: 0,
+  recentFalseClaims: [], lastUpdated: new Date().toISOString(),
+};
+
+/** Stats with some claim history */
+const statsWithClaims = {
+  ...emptyStats,
+  totalClaims: 47, verifiedTrue: 38, verifiedFalse: 9, trustScore: 0.808,
+  totalBlocks: 3, sessionsTracked: 14,
+};
+
 /** Build a minimal valid ledger event JSON line */
 function makeLine(overrides = {}) {
   return JSON.stringify({
@@ -61,31 +77,65 @@ describe("summary.js — buildSessionSummary", () => {
 });
 
 describe("summary.js — formatSummary", () => {
-  it("includes 'none' when no runs", () => {
-    const out = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 0 });
-    expect(out).toContain("none");
+  it("shows tracking starts now when no claims", () => {
+    const out = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 0, stats: emptyStats });
+    expect(out).toContain("tracking starts now");
   });
 
   it("includes dashboard URL always", () => {
-    const out = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 0 });
+    const out = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 0, stats: emptyStats });
     expect(out).toContain("localhost:4242");
   });
 
   it("includes chain integrity indicator", () => {
-    const validOut = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 5 });
+    const validOut = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 5, stats: emptyStats });
     expect(validOut).toContain("valid");
 
-    const brokenOut = formatSummary({ chainValid: false, recentRuns: [], totalEvents: 5 });
+    const brokenOut = formatSummary({ chainValid: false, recentRuns: [], totalEvents: 5, stats: emptyStats });
     expect(brokenOut).toContain("BROKEN");
   });
 
-  it("shows run ID prefix and status for recent runs", () => {
+  it("shows trust score percentage when claims exist", () => {
     const out = formatSummary({
       chainValid: true,
-      recentRuns: [{ runId: "abcdef123456", status: "completed", taskCount: 2, completedCount: 2 }],
+      recentRuns: [],
       totalEvents: 10,
+      stats: statsWithClaims,
     });
-    expect(out).toContain("abcdef12");
-    expect(out).toContain("completed");
+    expect(out).toContain("81%");
+    expect(out).toContain("claims true");
+  });
+
+  it("shows lies caught count", () => {
+    const out = formatSummary({
+      chainValid: true,
+      recentRuns: [],
+      totalEvents: 10,
+      stats: statsWithClaims,
+    });
+    expect(out).toContain("9");
+    expect(out).toContain("false claims");
+  });
+
+  it("shows writes blocked count", () => {
+    const out = formatSummary({
+      chainValid: true,
+      recentRuns: [],
+      totalEvents: 10,
+      stats: statsWithClaims,
+    });
+    expect(out).toContain("3");
+    expect(out).toContain("protected file");
+  });
+
+  it("shows sessions tracked", () => {
+    const out = formatSummary({
+      chainValid: true,
+      recentRuns: [],
+      totalEvents: 10,
+      stats: statsWithClaims,
+    });
+    expect(out).toContain("14");
+    expect(out).toContain("tracked");
   });
 });

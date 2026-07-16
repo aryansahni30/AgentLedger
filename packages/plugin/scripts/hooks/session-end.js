@@ -19,6 +19,7 @@ import path from "path";
 import { execSync } from "child_process";
 import { minimatch } from "minimatch";
 import { readSessionState, clearSessionState } from "../state.js";
+import { readStats, mergeSessionStats } from "../stats.js";
 
 const projectDir = process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
 const ledgerPath = path.join(projectDir, ".agentledger", "ledger.jsonl");
@@ -202,22 +203,64 @@ async function main() {
     });
   }
 
-  // Print summary
+  // Merge session stats into persistent stats.json
+  const statsBefore = await readStats();
+  const trustBefore = statsBefore.totalClaims > 0 ? Math.round(statsBefore.trustScore * 100) : null;
+
+  const reads = state.reads ?? 0;
+  const edits = (state.edits ?? 0) + (state.writes ?? 0);
+  const readEditRatio = edits > 0 ? (reads / edits).toFixed(1) : (reads > 0 ? "∞" : "—");
+  const readEditLabel = edits > 0 && reads / edits < 1.0 ? "⚠ low" : "healthy";
+
+  const updatedStats = await mergeSessionStats({
+    claimsVerifiedTrue: state.claimsVerifiedTrue ?? 0,
+    claimsVerifiedFalse: state.claimsVerifiedFalse ?? 0,
+    claimsUnverifiable: state.claimsUnverifiable ?? 0,
+    blocks: state.blocks ?? 0,
+    warnings: state.warnings ?? 0,
+    filesRead: (state.filesRead ?? []).length,
+    filesEdited: (state.filesEdited ?? []).length,
+    falseClaims: state.falseClaims ?? [],
+  });
+
+  const trustAfter = Math.round(updatedStats.trustScore * 100);
+  const sessionClaims = (state.claimsVerifiedTrue ?? 0) + (state.claimsVerifiedFalse ?? 0) + (state.claimsUnverifiable ?? 0);
+  const sessionFalse = state.claimsVerifiedFalse ?? 0;
+
+  // Print enhanced summary
   console.log("");
   console.log("╔═══════════════════════════════════════╗");
-  console.log("║       AgentLedger — Session End         ║");
+  console.log("║       AgentLedger — Session End       ║");
   console.log("╚═══════════════════════════════════════╝");
-  console.log(`  Run ID   : ${runId.slice(0, 8)}`);
-  console.log(`  Status   : ${verificationPassed ? "✓ PASSED" : "✗ FAILED"}`);
+  console.log(`  Status     : ${verificationPassed ? "✓ PASSED" : "✗ FAILED"}`);
+
+  if (sessionClaims > 0) {
+    console.log(`  Claims     : ${sessionClaims} made · ${state.claimsVerifiedTrue ?? 0} verified · ${sessionFalse} false`);
+  }
+
   if (violations.length > 0) {
-    console.log(`  Boundary : ${violations.length} violation(s) detected (Bash)`);
+    console.log(`  Boundary   : ${violations.length} violation(s) detected`);
     for (const v of violations) {
       console.log(`    - ${v.file}  [${v.pattern}]`);
     }
   } else {
-    console.log("  Boundary : ✓ no violations");
+    console.log("  Boundary   : ✓ clean");
   }
-  console.log(`  Tests    : exit ${testResult.exitCode}`);
+  console.log(`  Tests      : exit ${testResult.exitCode}`);
+  console.log(`  Read:Edit  : ${readEditRatio}x (${readEditLabel})`);
+
+  if (trustBefore !== null) {
+    const delta = trustAfter - trustBefore;
+    const arrow = delta > 0 ? "↑" : delta < 0 ? "↓" : "→";
+    console.log(`  Trust Δ    : ${trustBefore}% → ${trustAfter}%  ${arrow}`);
+  } else if (sessionClaims > 0) {
+    console.log(`  Trust      : ${trustAfter}% (first measurement)`);
+  }
+
+  if ((state.editWithoutRead ?? []).length > 0) {
+    console.log(`  ⚠ Edited without reading: ${state.editWithoutRead.map((f) => path.basename(f)).join(", ")}`);
+  }
+
   console.log("");
 
   // Clear session state

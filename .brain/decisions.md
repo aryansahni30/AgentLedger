@@ -122,3 +122,51 @@ Format: **Decision** | **Alternatives considered** | **Why this** | **Date**
 **Why:** The target demo repos are TypeScript (React, Next.js). Running `npm test` / `npm run typecheck` as verification commands assumes a JS ecosystem by default. TypeScript gives strong typing for schema validation with Zod. pnpm workspaces is the current standard for TypeScript monorepos. The audience (AI infra engineers, DevTools builders) skews TypeScript-comfortable.
 
 **Date:** 2026-07-06
+
+---
+
+## ADR-011: Plugin-only product focus (drop CLI orchestrator)
+
+**Decision:** Product focus shifts to plugin (observer/enforcer mode). CLI orchestrator deprioritized — not deleted, but no new features.
+
+**Alternatives:** CLI-first (orchestrator is the product). Dual investment (both equally). Plugin as thin wrapper over CLI.
+
+**Why:** CLI orchestrator requires users to change their workflow (`agentledger run` instead of normal Claude Code). Plugin is zero-friction — install and forget. Real users want guardrails on their existing agent, not a new orchestration layer. Skills shelling out to CLI created a brittle dependency chain.
+
+**Date:** 2026-07-15
+
+---
+
+## ADR-012: Direction A — "The Lie Detector" as product direction
+
+**Decision:** Position AgentLedger as "the trust layer" that catches false completion claims. Trust score as hero metric. Real-time claim verification via Stop hook.
+
+**Alternatives:** Direction B (CI/CD guard — enterprise security), Direction C (team governance — shared ledger), Direction D (harness X-ray — session transparency).
+
+**Why:** Problem 1 (agents lie about completion) is the loudest, most current, most screenshot-able pain in the ecosystem (mid-2026). Our deterministic verification is better than the workaround (AMD paying for Codex-as-verifier). Trust score is inherently shareable — "my AI lies 19% of the time" drives organic growth. Mostly repackaging existing code, not new architecture.
+
+**Date:** 2026-07-15
+
+---
+
+## ADR-013: Keyword matching for claim detection (not LLM classifier)
+
+**Decision:** Detect completion claims with regex/keyword patterns, not an LLM classifier.
+
+**Alternatives:** Lightweight LLM classifier (Haiku). Embedding similarity. Structured output parsing.
+
+**Why:** Keyword matching is <1ms, free, deterministic, zero dependencies. False positive reduction via code-block stripping and negation-context filtering. Upgrade path to LLM classifier exists if false positive rate exceeds 5%, but keyword MVP is the right starting point.
+
+**Date:** 2026-07-15
+
+---
+
+## ADR-014: Trust score excludes unverifiable claims
+
+**Decision:** Trust score = verifiedTrue / (verifiedTrue + verifiedFalse). Claims with no test command to check against are logged as CLAIM_UNVERIFIABLE and excluded from the denominator.
+
+**Alternatives:** Count unverifiable as "trusted by default" (inflates score). Count as "untrusted" (penalizes unfairly). Include with neutral weight.
+
+**Why:** The trust score must be deterministically defensible. Including unverifiable claims in either direction makes the number misleading. Logging them separately lets users see the gap and configure a test command to close it.
+
+**Date:** 2026-07-15

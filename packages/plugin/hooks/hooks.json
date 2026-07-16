@@ -27,12 +27,24 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write|Bash",
+        "matcher": "Edit|Write|Bash|Read",
         "hooks": [
           {
             "type": "command",
             "command": "node scripts/hooks/post-tool-use.js",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/hooks/stop.js",
+            "timeout": 45
           }
         ]
       }

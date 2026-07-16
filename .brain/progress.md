@@ -2,7 +2,7 @@
 
 ## Current Status
 
-**Phase:** Plugin hardening complete — verify dual-mode, pre-tool-use exit-code-2 protocol, skill rewrites  
+**Phase:** Plugin v2 "The Trust Layer" — Phases 1-4 complete (stats, claim detection, warning zone, standalone skills)  
 **Last updated:** 2026-07-15
 
 ---
@@ -211,7 +211,7 @@
 - [x] `scripts/state.js` — `readSessionState`, `writeSessionState`, `clearSessionState` with `proper-lockfile`; state lives in `.agentledger/session.json`; default shape: `{ runId: null, previousHash: genesis_hash, dirty: false, sessionStart: ISO }`
 - [x] `scripts/server-manager.js` — `ensureServerRunning()` — GET /health, spawn detached if not up, poll 2s max; non-fatal
 - [x] `scripts/summary.js` — `buildSessionSummary(projectDir)` reads ledger + verifyChain + replayLedger; `formatSummary()` formats compact console block
-- [x] `scripts/hooks/session-start.js` — ensure `.agentledger/` + default `config.json`; start dashboard (non-blocking); print summary
+- [x] `scripts/hooks/session-start.js` — ensure `.agentledger/` + default `config.json`; start dashboard (non-blocking); writes summary via Claude Code SessionStart JSON envelope on stdout with both `hookSpecificOutput.additionalContext` (model context injection) and `systemMessage` (user-visible terminal banner). Raw text does NOT work — must use JSON envelope per Claude Code hook contract (matched claude-mem/ECC plugin pattern)
 - [x] `scripts/hooks/pre-tool-use.js` — Layer 1: minimatch block on Edit/Write to `blockedFiles`; emits TOOL_DENIED event (with `file_path` + `matched_pattern`); exits code 2 (Claude Code block protocol); lazy-inits observed run if none active
 - [x] `scripts/hooks/post-tool-use.js` — lazy run init on first Edit/Write (RUN_CREATED observed + INTENT_COMPILED); records TOOL_CALLED for Edit/Write/Bash
 - [x] `scripts/hooks/session-end.js` — Layer 2: git diff boundary check + test command run; emits BOUNDARY_VIOLATION / VERIFICATION_PASSED/FAILED / RUN_COMPLETED/FAILED; clears session state
@@ -234,6 +234,50 @@
 - [x] `AGENTLEDGER_PROJECT_ROOT` env var read lazily (first tool call); throws descriptive error if unset
 - [x] `"mcp"` script added to root `package.json` (`node packages/mcp-server/dist/index.js`)
 - [x] `.brain/architecture.md` rewritten with full monorepo tree, data flow diagrams, MCP section
+
+### Plugin v2: "The Trust Layer" — Phases 1-4 ✅
+Architecture doc: `.brain/plugin-v2-plan.md`
+
+**Phase 1: Stats Foundation + Enhanced Banner ✅**
+- [x] `scripts/stats.js` — NEW: `readStats()`, `writeStats()`, `mergeSessionStats()` with lockfile; persistent `stats.json` tracks trust score, claims, blocks, read:edit ratio
+- [x] `scripts/state.js` — EXTENDED: session state now tracks `reads`, `edits`, `writes`, `bashCalls`, `blocks`, `warnings`, `claimsDetected`, `claimsVerifiedTrue/False`, `claimsUnverifiable`, `filesRead[]`, `filesEdited[]`, `editWithoutRead[]`, `falseClaims[]`
+- [x] `scripts/hooks/post-tool-use.js` — EXTENDED: now tracks `Read` tool (matcher `Edit|Write|Bash|Read`), increments per-tool counters, tracks unique file lists, detects edit-without-read (warns on stderr)
+- [x] `scripts/summary.js` — REWRITTEN: banner now shows trust score (hero number), lies caught, writes blocked, chain integrity, sessions tracked. Color-coded: green ≥90%, yellow ≥70%, red <70%
+- [x] `scripts/hooks/session-end.js` — ENHANCED: computes session stats, calls `mergeSessionStats()` to persist, shows claims/boundary/tests/read:edit ratio/trust delta in summary
+- [x] `scripts/hooks/pre-tool-use.js` — EXTENDED: increments `blocks` counter in session state on denial
+- [x] 9 new stats tests + 6 updated summary tests — 45 total, all passing
+
+**Phase 2: Stop Hook — Claim Detection + Instant Verification ✅**
+- [x] `scripts/claim-detector.js` — NEW: `detectClaims(text)` scans for 8 claim patterns (test_claim, build_claim, fix_claim, completion_claim, quality_claim); strips code blocks and inline code to avoid false positives; deduplicates by type
+- [x] `scripts/verifier.js` — NEW: shared `verify()` function extracted from session-end; `runTestCommand()`, `getChangedFiles()`, `detectBoundaryViolations()`; used by both Stop hook and SessionEnd
+- [x] `scripts/hooks/stop.js` — NEW: fires every assistant turn; extracts message, detects claims, runs quick verification (30s timeout), emits `CLAIM_VERIFIED`/`CLAIM_FALSIFIED`/`CLAIM_UNVERIFIABLE`; 60s debounce per claim type; skips turns with no file changes
+- [x] `hooks/hooks.json` — Stop hook registered (45s timeout)
+- [x] 17 claim-detector tests + 5 verifier tests — 67 total, all passing
+
+**Phase 3: Warning Zone + Risk-Tiered Config ✅**
+- [x] `scripts/hooks/pre-tool-use.js` — EXTENDED: `warnFiles` config alongside `blockedFiles`; blocked = exit(2) hard block, warned = stderr warning + `TOOL_WARNED` event + exit(0) allow
+- [x] Default `warnFiles`: `**/migrations/**`, `**/auth/**`, `package.json`, `**/middleware.*`
+- [x] Default config extended: `warnFiles`, `claimDetection: true`
+- [x] Warning counter tracked in session state
+
+**Phase 4: Standalone Skills (Drop CLI Dependency) ✅**
+- [x] `skills/ledger.md` — REWRITTEN: reads `ledger.jsonl` directly, no CLI
+- [x] `skills/verify.md` — REWRITTEN: runs test command + git diff directly
+- [x] `skills/audit.md` — REWRITTEN: reads `stats.json` + `ledger.jsonl`, computes risk score
+- [x] `skills/handoff.md` — REWRITTEN: reads ledger + session state, generates handoff doc
+- [x] `skills/trust.md` — NEW: trust score breakdown, recent false claims, read:edit ratio
+
+**New files created:**
+- `scripts/stats.js` — persistent stats module
+- `scripts/verifier.js` — shared verification logic
+- `scripts/claim-detector.js` — claim pattern matching
+- `scripts/hooks/stop.js` — real-time claim detection hook
+- `skills/trust.md` — trust score skill
+- `__tests__/stats.test.js` — 9 tests
+- `__tests__/claim-detector.test.js` — 17 tests
+- `__tests__/verifier.test.js` — 5 tests
+
+**67 total plugin tests across 9 test files — all passing**
 
 ---
 

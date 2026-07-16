@@ -26,14 +26,20 @@ const projectDir = process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
 const configPath = path.join(projectDir, ".agentledger", "config.json");
 const ledgerPath = path.join(projectDir, ".agentledger", "ledger.jsonl");
 
-/** @returns {string[]} */
-function loadBlockedPatterns() {
+/** @returns {{ blockedFiles: string[], warnFiles: string[] }} */
+function loadPatterns() {
   try {
     const raw = fs.readFileSync(configPath, "utf8");
     const config = JSON.parse(raw);
-    return Array.isArray(config.blockedFiles) ? config.blockedFiles : [];
+    return {
+      blockedFiles: Array.isArray(config.blockedFiles) ? config.blockedFiles : [],
+      warnFiles: Array.isArray(config.warnFiles) ? config.warnFiles : [],
+    };
   } catch {
-    return ["**/.env", "**/secrets.*", "**/*.pem", "**/*.key"];
+    return {
+      blockedFiles: ["**/.env", "**/secrets.*", "**/*.pem", "**/*.key"],
+      warnFiles: ["**/migrations/**", "**/auth/**", "package.json", "**/middleware.*"],
+    };
   }
 }
 
@@ -174,22 +180,67 @@ async function main() {
     process.exit(0); // No file path — allow
   }
 
-  const patterns = loadBlockedPatterns();
-  const matched = matchesBlocked(filePath, patterns);
+  const { blockedFiles, warnFiles } = loadPatterns();
 
-  if (!matched) {
-    process.exit(0); // Not blocked — allow
+  // Check blocked first — hard block
+  const blockedMatch = matchesBlocked(filePath, blockedFiles);
+  if (blockedMatch) {
+    const reason = `[AgentLedger] Write to "${path.basename(filePath)}" blocked — matches protected pattern "${blockedMatch}"`;
+
+    // Emit denial to ledger (lazy-inits run if needed)
+    await emitDenied(filePath, blockedMatch, toolName);
+
+    // Increment blocks counter in session state
+    try {
+      const currentState = await readSessionState();
+      await writeSessionState({ ...currentState, blocks: (currentState.blocks ?? 0) + 1 });
+    } catch {
+      // Non-fatal — block still happens
+    }
+
+    // Exit code 2 = block; reason on stderr for Claude Code
+    process.stderr.write(reason + "\n");
+    process.exit(2);
   }
 
-  // Block the write
-  const reason = `[AgentLedger] Write to "${path.basename(filePath)}" blocked — matches protected pattern "${matched}"`;
+  // Check warn — soft warning, still allows
+  const warnMatch = matchesBlocked(filePath, warnFiles);
+  if (warnMatch) {
+    process.stderr.write(
+      `⚠ AgentLedger: editing ${path.basename(filePath)} — flagged sensitive (${warnMatch})\n`
+    );
 
-  // Emit denial to ledger (lazy-inits run if needed)
-  await emitDenied(filePath, matched, toolName);
+    // Emit TOOL_WARNED to ledger
+    try {
+      let state = await readSessionState();
+      if (!state.runId) {
+        const runId = randomUUID();
+        await initRun(runId);
+        state = { ...state, runId, dirty: true };
+      }
+      await writeSessionState({ ...state, warnings: (state.warnings ?? 0) + 1 });
 
-  // Exit code 2 = block; reason on stderr for Claude Code
-  process.stderr.write(reason + "\n");
-  process.exit(2);
+      const { LedgerWriter } = await import("@agentledger/core");
+      const writer = new LedgerWriter(ledgerPath);
+      await writer.appendEvent({
+        event_id: `evt_${Date.now()}_warned`,
+        run_id: state.runId,
+        timestamp: new Date().toISOString(),
+        actor: "plugin:pre-tool-use",
+        event_type: "TOOL_WARNED",
+        payload: {
+          tool: toolName,
+          file_path: filePath,
+          matched_pattern: warnMatch,
+        },
+      });
+    } catch {
+      // Non-fatal — warning still shown
+    }
+  }
+
+  // Allow the tool call
+  process.exit(0);
 }
 
 main().catch((err) => {

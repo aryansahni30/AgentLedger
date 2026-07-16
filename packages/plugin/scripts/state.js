@@ -17,13 +17,47 @@ function sessionStatePath() {
   return path.join(projectDir, ".agentledger", "session.json");
 }
 
-/** @typedef {{ runId: string | null, dirty: boolean, sessionStart: string }} SessionState */
+/**
+ * @typedef {{
+ *   runId: string | null,
+ *   dirty: boolean,
+ *   sessionStart: string,
+ *   reads: number,
+ *   edits: number,
+ *   writes: number,
+ *   bashCalls: number,
+ *   blocks: number,
+ *   warnings: number,
+ *   claimsDetected: number,
+ *   claimsVerifiedTrue: number,
+ *   claimsVerifiedFalse: number,
+ *   claimsUnverifiable: number,
+ *   filesRead: string[],
+ *   filesEdited: string[],
+ *   editWithoutRead: string[],
+ *   falseClaims: Array<{ claim: string, actual: string, timestamp: string }>
+ * }} SessionState
+ */
 
 /** @returns {SessionState} */
 const DEFAULT_STATE = () => ({
   runId: null,
   dirty: false,
   sessionStart: new Date().toISOString(),
+  reads: 0,
+  edits: 0,
+  writes: 0,
+  bashCalls: 0,
+  blocks: 0,
+  warnings: 0,
+  claimsDetected: 0,
+  claimsVerifiedTrue: 0,
+  claimsVerifiedFalse: 0,
+  claimsUnverifiable: 0,
+  filesRead: [],
+  filesEdited: [],
+  editWithoutRead: [],
+  falseClaims: [],
 });
 
 /**
