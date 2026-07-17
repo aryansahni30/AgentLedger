@@ -1,105 +1,51 @@
 import { useState } from "react";
-import { useSSEContext } from "./context/SSEContext.js";
-import { UserProvider, useCurrentUser } from "./context/UserContext.js";
-import { useRuns } from "./hooks/useRuns.js";
-import { RunList } from "./components/RunList.js";
-import { RunDetail } from "./components/RunDetail.js";
-import { EventFeed } from "./components/EventFeed.js";
-import { Leaderboard } from "./components/Leaderboard.js";
+import { useAnalytics } from "./hooks/useAnalytics.js";
+import { HeroBand } from "./components/HeroBand.js";
+import { TrustChart } from "./components/TrustChart.js";
+import { SessionList } from "./components/SessionList.js";
+import { SessionDetail } from "./components/SessionDetail.js";
 
-type Tab = "runs" | "leaderboard";
-type RunFilter = "all" | "mine";
-
-function ConnectionBadge(): React.ReactElement {
-  const { connected } = useSSEContext();
-  return (
-    <div className="connection-badge">
-      <span className={`connection-dot${connected ? " connected" : ""}`} />
-      <span>{connected ? "Live" : "Reconnecting…"}</span>
-    </div>
-  );
-}
-
-function AppInner(): React.ReactElement {
-  const [tab, setTab] = useState<Tab>("runs");
+export function App(): React.ReactElement {
+  const { aggregate, sessions, trends, loading } = useAnalytics();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [runFilter, setRunFilter] = useState<RunFilter>("all");
-  const { runs } = useRuns();
-  const currentUser = useCurrentUser();
 
-  const selectedRun = selectedRunId
-    ? (runs.find((r) => r.runId === selectedRunId) ?? null)
-    : null;
+  const selectedSession =
+    selectedRunId !== null
+      ? (sessions.find((s) => s.runId === selectedRunId) ?? null)
+      : null;
+
+  if (loading && sessions.length === 0) {
+    return (
+      <div className="app-loading">
+        <div className="app-loading-text">Loading AgentLedger…</div>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1>AgentLedger</h1>
-        <div className="tab-bar">
-          <button
-            className={`tab-btn${tab === "runs" ? " active" : ""}`}
-            onClick={() => setTab("runs")}
-          >
-            Runs
-          </button>
-          <button
-            className={`tab-btn${tab === "leaderboard" ? " active" : ""}`}
-            onClick={() => setTab("leaderboard")}
-          >
-            Leaderboard
-          </button>
-        </div>
-        <ConnectionBadge />
+        <h1 className="app-logo">AgentLedger</h1>
+        <span className="app-tagline">Trust Layer</span>
       </header>
 
-      <aside className="app-sidebar">
-        {tab === "runs" ? (
-          <>
-            <div className="run-filter-bar">
-              <button
-                className={`filter-btn${runFilter === "all" ? " active" : ""}`}
-                onClick={() => setRunFilter("all")}
-              >
-                Team
-              </button>
-              <button
-                className={`filter-btn${runFilter === "mine" ? " active" : ""}`}
-                onClick={() => setRunFilter("mine")}
-                title={`Runs by ${currentUser}`}
-              >
-                Mine
-              </button>
-            </div>
-            <RunList
+      <main className="app-main">
+        <HeroBand metrics={aggregate} />
+        <TrustChart data={trends} />
+
+        <div className="app-content">
+          <div className="app-sessions">
+            <SessionList
+              sessions={sessions}
               selectedRunId={selectedRunId}
               onSelect={setSelectedRunId}
-              filter={runFilter}
             />
-          </>
-        ) : (
-          <div className="run-list-header">Policy Ranks</div>
-        )}
-      </aside>
-
-      <main className="app-main">
-        {tab === "runs" ? (
-          <RunDetail run={selectedRun} />
-        ) : (
-          <Leaderboard />
-        )}
+          </div>
+          <div className="app-detail">
+            <SessionDetail session={selectedSession} />
+          </div>
+        </div>
       </main>
-
-      <aside className="app-feed">
-        <EventFeed />
-      </aside>
     </div>
-  );
-}
-
-export function App(): React.ReactElement {
-  return (
-    <UserProvider>
-      <AppInner />
-    </UserProvider>
   );
 }

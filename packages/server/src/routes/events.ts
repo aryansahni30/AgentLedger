@@ -24,6 +24,11 @@ export function createEventsRouter(
     });
   });
 
+  // All historical events as JSON array (used by dashboard analytics)
+  router.get("/history", (_req, res) => {
+    res.json({ success: true, data: eventStore });
+  });
+
   // Stats — used by integration tests to inspect SSEManager state
   router.get("/stats", (_req, res) => {
     res.json({
