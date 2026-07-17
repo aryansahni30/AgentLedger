@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { generateAuditReport, computeRiskScore } from "../auditReport.js";
 import type { LedgerEvent, AuditTaskRecord, PatchRisk, BoundaryViolation, ToolDenial } from "../../schemas/index.js";
 

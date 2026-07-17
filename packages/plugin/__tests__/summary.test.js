@@ -82,9 +82,16 @@ describe("summary.js — formatSummary", () => {
     expect(out).toContain("tracking starts now");
   });
 
-  it("includes dashboard URL always", () => {
-    const out = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 0, stats: emptyStats });
-    expect(out).toContain("localhost:4242");
+  it("shows dashboard URL when running, 'not running' when not", () => {
+    const runningOut = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 0, stats: emptyStats, dashboardStatus: { running: true, port: 4242 } });
+    expect(runningOut).toContain("localhost:4242");
+
+    const stoppedOut = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 0, stats: emptyStats, dashboardStatus: { running: false, port: 4242 } });
+    expect(stoppedOut).toContain("not running");
+
+    // No dashboardStatus defaults to "not running"
+    const defaultOut = formatSummary({ chainValid: true, recentRuns: [], totalEvents: 0, stats: emptyStats });
+    expect(defaultOut).toContain("not running");
   });
 
   it("includes chain integrity indicator", () => {

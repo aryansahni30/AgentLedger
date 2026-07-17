@@ -170,3 +170,27 @@ Format: **Decision** | **Alternatives considered** | **Why this** | **Date**
 **Why:** The trust score must be deterministically defensible. Including unverifiable claims in either direction makes the number misleading. Logging them separately lets users see the gap and configure a test command to close it.
 
 **Date:** 2026-07-15
+
+---
+
+## ADR-015: npm package names (unscoped, conflict avoidance)
+
+**Decision:** Use unscoped names: `agentledger-plugin`, `agentledger-cli`, `agentledger-mcp-server`. Core stays scoped as `@agentledger/core` (scope available).
+
+**Alternatives:** Use `agentledger` (taken by agentledgerhq — different project). Use `@aryansahni/agentledger-*` personal scope.
+
+**Why:** `agentledger` (v0.5.0) and `agentledger-mcp` (v1.0.0) are owned by agentledgerhq on npm — different project, different org. Unscoped names with suffixes (`-plugin`, `-cli`, `-mcp-server`) are all available and avoid trademark/confusion issues. Personal scope `@aryansahni/` is viable fallback but harder to discover.
+
+**Date:** 2026-07-16
+
+---
+
+## ADR-016: Plugin bundles all deps, zero runtime dependencies
+
+**Decision:** Plugin's dist/*.cjs files inline all dependencies (zod, minimatch, proper-lockfile, @agentledger/core) via esbuild bundling. Published package has zero runtime `dependencies`.
+
+**Alternatives:** Publish @agentledger/core to npm and depend on it normally (lockstep versioning). Keep deps external (requires user to install them).
+
+**Why:** Self-contained bundles eliminate dependency resolution issues for end users. A Claude Code plugin should install and work with zero friction — no `pnpm install` in the plugin dir, no workspace links, no transitive dep conflicts. Bundle size (~1.1MB per hook) is acceptable for a CLI tool.
+
+**Date:** 2026-07-16

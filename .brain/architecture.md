@@ -29,18 +29,27 @@ packages/
       audit.ts        agentledger audit / agentledger leaderboard
       serve.ts        agentledger serve — starts API server, owns SIGINT/SIGTERM handlers
   plugin/             agentledger-plugin — Claude Code observer/enforcer plugin
+    build.js            esbuild bundler — each hook → self-contained CJS under dist/
+    install.js          Single-command installer: merges hooks into settings.json, installs skills
     hooks/
-      hooks.json        Nested hook matchers (SessionStart/PreToolUse/PostToolUse/SessionEnd)
-    scripts/
+      hooks.json        Hook matchers pointing to dist/*.cjs (SessionStart/PreToolUse/PostToolUse/Stop/SessionEnd)
+    scripts/            Source ESM scripts (for monorepo dev; bundled to dist/ for standalone)
       state.js          readSessionState / writeSessionState / clearSessionState (proper-lockfile)
-      server-manager.js ensureServerRunning() — health check + detached spawn
-      summary.js        buildSessionSummary + formatSummary (reads ledger, replayLedger)
+      server-manager.js ensureServerRunning() → { running, port }; configurable port from config.json
+      summary.js        buildSessionSummary + formatSummary; conditional dashboard URL
+      stats.js          readStats / writeStats / mergeSessionStats — persistent stats.json
+      claim-detector.js detectClaims(text) — 8 regex patterns, 5 claim types, code-block stripping
+      verifier.js       verify() — shared test runner + git diff boundary check
       hooks/
-        session-start.js  Ensure .agentledger/ + config.json; start dashboard; print summary
-        pre-tool-use.js   Layer 1: minimatch block on Edit/Write to blockedFiles; emit TOOL_DENIED
-        post-tool-use.js  Lazy run init (first Edit/Write → RUN_CREATED observed); TOOL_CALLED events
-        session-end.js    Layer 2: git diff + test command; VERIFICATION_*/RUN_*/BOUNDARY_VIOLATION
-    skills/             4 slash commands (ledger, verify, handoff, audit)
+        session-start.js  Ensure .agentledger/ + config.json; install skills; start dashboard; print banner
+        pre-tool-use.js   Layer 1: blockedFiles → exit(2) block; warnFiles → stderr warning
+        post-tool-use.js  Lazy run init (first Edit/Write → RUN_CREATED observed); Read/Edit/Write/Bash tracking
+        stop.js           Real-time claim detection: scan assistant message, verify claims, surface discrepancies
+        session-end.js    Layer 2: git diff + test command; stats merge; trust delta; enhanced summary
+    skills/             5 slash commands (ledger, verify, audit, handoff, trust) — standalone, no CLI dependency
+    dist/               Bundled CJS files — zero external dependencies, runs standalone without workspace
+      *.cjs             Self-contained hook bundles (zod + minimatch + proper-lockfile + core inlined)
+      skills/           Copied skill .md files for install script access
   server/             @agentledger/server — Express HTTP API + SSE event stream
     src/
       services/

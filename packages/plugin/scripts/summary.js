@@ -20,7 +20,7 @@ import { readStats } from "./stats.js";
  * Build a summary of recent AgentLedger activity for the project.
  *
  * @param {string} projectDir
- * @returns {Promise<{ chainValid: boolean, recentRuns: RunSummary[], totalEvents: number, stats: Stats }>}
+ * @returns {Promise<{ chainValid: boolean, recentRuns: RunSummary[], totalEvents: number, stats: Stats, dashboardStatus?: { running: boolean, port: number } }>}
  */
 export async function buildSessionSummary(projectDir) {
   const ledgerPath = path.join(projectDir, ".agentledger", "ledger.jsonl");
@@ -97,7 +97,7 @@ const C = {
  * Format the summary as a compact console-printable block with ANSI colors.
  * Hero metric: trust score (claim accuracy percentage).
  *
- * @param {{ chainValid: boolean, recentRuns: RunSummary[], totalEvents: number, stats: Stats }} summary
+ * @param {{ chainValid: boolean, recentRuns: RunSummary[], totalEvents: number, stats: Stats, dashboardStatus?: { running: boolean, port: number } }} summary
  * @returns {string}
  */
 export function formatSummary(summary) {
@@ -134,8 +134,12 @@ export function formatSummary(summary) {
   // Sessions tracked
   const sessionsLine = `  ${C.label}Sessions${C.r}        : ${C.value}${stats.sessionsTracked}${C.r} ${C.dim}tracked${C.r}`;
 
-  // Dashboard
-  const dashLine = `  ${C.label}Dashboard${C.r}       : ${C.url}http://localhost:4242${C.r}`;
+  // Dashboard — only show if server is running
+  const dash = summary.dashboardStatus;
+  const dashPort = dash?.port ?? 4242;
+  const dashLine = dash?.running
+    ? `  ${C.label}Dashboard${C.r}       : ${C.url}http://localhost:${dashPort}${C.r}`
+    : `  ${C.label}Dashboard${C.r}       : ${C.dim}not running${C.r}`;
 
   const contentLines = [trustLine, liesLine, blocksLine, chainLine, sessionsLine, dashLine];
 

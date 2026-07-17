@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { generateHandoff } from "../generateHandoff.js";
 import type { LedgerEvent } from "../../schemas/index.js";
 

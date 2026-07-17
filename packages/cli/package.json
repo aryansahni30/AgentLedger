@@ -1,17 +1,27 @@
 {
-  "name": "@agentledger/cli",
+  "name": "agentledger-cli",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "description": "CLI for AgentLedger — coordinate AI coding agents with an immutable task ledger and verification gate.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aryansahni/AgentLeader",
+    "directory": "packages/cli"
+  },
+  "keywords": ["agentledger", "cli", "ai-agent", "orchestration", "verification"],
+  "engines": { "node": ">=18" },
   "main": "./dist/index.js",
   "bin": {
     "agentledger": "./dist/index.js"
   },
+  "files": ["dist/"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@agentledger/core": "workspace:*",

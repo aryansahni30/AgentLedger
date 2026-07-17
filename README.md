@@ -1,223 +1,224 @@
 # AgentLedger
 
-> A coordination framework for AI coding agents that replaces free-form agent collaboration with a structured execution protocol: plan → assign isolated work → record every action → verify outputs → assemble only after checks pass.
+> **Claude says done. AgentLedger checks.**
 
----
-
-## What it does
-
-AgentLedger wraps one or more AI coding agents (Claude, GPT-4, etc.) with:
-
-1. **An append-only hash-chained ledger** — every agent action is recorded as a tamper-evident event in `.agentledger/ledger.jsonl`
-2. **Git worktree isolation** — each task runs in its own `git worktree` branch, scoped via sparse-checkout to only the files the task owns
-3. **A verification gate** — before any patch is accepted, a deterministic verifier checks file boundaries and runs real exit codes from commands like `npm test` or `tsc`
-4. **Replay** — any run can be reconstructed from its event log without re-executing agents
-
-The agents are non-deterministic. The protocol is not. AgentLedger doesn't try to make LLM behavior reproducible — it makes the coordination layer around that behavior reliable and auditable.
-
-![AgentLedger demo](demo.gif)
-
----
-
-## Two failure modes it catches
-
-### 1. Boundary violation
-
-An agent attempts to write to a file outside its assigned scope:
-
-```
-═══ TASK: Add Redis caching layer ═══
-  ✗ BOUNDARY_VIOLATION: [blocked_file] .env
-      File is in blockedFiles list
-  ✗ Verification FAILED
-    Worktree preserved at: .agentledger/worktrees/task-redis-cache
-```
-
-The ledger records a `BOUNDARY_VIOLATION` event. The patch is rejected. The worktree is preserved for inspection.
-
-### 2. False self-report
-
-An agent claims "tests pass" in its structured output, but the verifier runs `npm test` and gets exit code 1:
-
-```
-═══ TASK: Fix auth middleware ═══
-  ✗ Verification FAILED
-    ✗ test (exit 1)
-      Error: expect(received).toBe(expected)
-      Expected: 200
-      Received: 401
-```
-
-Worker self-reports are logged to the ledger but never trusted. Real exit codes decide task outcome.
-
----
-
-## Architecture
-
-```
-agentledger run "<request>"
-        │
-        ▼
-  ┌─────────────────────────────────────────────┐
-  │            Orchestrator (CLI)                │
-  │  1. Load .agentledger/config.json            │
-  │  2. Build IntentContract                     │
-  │  3. Call LLM planner → TaskGraph             │
-  │  4. For each task (topo-sorted):             │
-  │     a. createTaskWorktree (git branch)       │
-  │     b. runWorkerLLM (Anthropic tool loop)    │
-  │     c. verifyTask (boundary + commands)      │
-  │     d. Emit ledger events                    │
-  │     e. Cleanup or preserve worktree          │
-  └─────────────────────────────────────────────┘
-        │
-        ▼
-  .agentledger/
-    config.json      — task config, verification commands, blocked files
-    ledger.jsonl     — append-only hash-chained event log
-    tasks.json       — current task graph snapshot
-    worktrees/       — per-task git worktrees (cleaned up on success)
-    patches/         — unified diffs (future)
-```
-
-### Two-layer file isolation
-
-**Prevention** — sparse-checkout limits which files are visible in the worktree.  
-**Detection** — the verifier diffs the task branch against `allowedFiles`/`blockedFiles` regardless of what the worker reported.
-
-Both layers are required. Sparse-checkout prevents accidental reads; the verifier catches intentional or accidental writes to blocked paths.
-
-### Ledger hash chain
-
-Every event carries `hash` (SHA-256 of the event payload) and `previous_hash` (hash of the prior event). Tampering with any event invalidates all subsequent hashes. `agentledger replay` verifies the full chain before reconstructing state.
-
----
-
-## Installation
+A Claude Code plugin that catches false completion claims in real-time, blocks writes to protected files before they hit disk, and keeps a tamper-proof audit trail of everything your AI agent does.
 
 ```bash
-# Requires Node.js >= 18, pnpm >= 9
-pnpm install
-pnpm -r build
-
-# Link the CLI globally
-cd packages/cli && npm link
+npx agentledger-plugin install
 ```
+
+That's it. One command. No config, no hosting, no cost. Works immediately in your next Claude Code session.
 
 ---
 
-## Quick start
+## What it catches
 
-```bash
-# 1. Initialize AgentLedger in any git repo
-cd /path/to/your/repo
-agentledger init
+### 1. False claims — caught in real-time
 
-# 2. Run a task (requires ANTHROPIC_API_KEY)
-export ANTHROPIC_API_KEY=sk-ant-...
-agentledger run "Add input validation to the user registration endpoint"
+Claude says "tests pass." AgentLedger runs `npm test`. Exit code 1.
 
-# 3. View the ledger
-agentledger ledger view
-
-# 4. Replay a specific run
-agentledger replay --run-id <run-id>
 ```
+⚠ CLAIM CHECK: Claude said "tests pass" → actual: npm test exit 1
+```
+
+This fires mid-session via the Stop hook — not at the end when you've already built 20 turns on a lie. Every claim is tracked and scored:
+
+```
+╔═══════════════════════════════════════╗
+║       AgentLedger — Session End       ║
+╚═══════════════════════════════════════╝
+  Status     : ✓ PASSED
+  Claims     : 3 made · 3 verified · 0 false
+  Boundary   : ✓ clean
+  Tests      : exit 0
+  Read:Edit  : 2.1x (healthy)
+  Trust Δ    : 81% → 83%  ↑
+```
+
+### 2. Protected file writes — blocked before disk
+
+Claude tries to edit `.env`, a `.pem` file, or anything matching your `blockedFiles` patterns:
+
+```
+[AgentLedger] Write to ".env" blocked — matches protected pattern "**/.env"
+```
+
+The Edit/Write tool call is rejected with exit code 2. The file is never touched. The denial is recorded in the ledger.
+
+### 3. Tamper-proof audit trail
+
+Every action — every file read, edit, bash call, blocked write, verified claim, falsified claim — is appended to `.agentledger/ledger.jsonl` with SHA-256 hash chaining. Tamper with any event and the chain breaks.
 
 ---
 
-## Demo: temptation scenario
+## How it works
 
-The demo repo in `packages/examples/demo-repo` is a simple user-lookup service backed by PostgreSQL. The task asks the agent to add Redis caching — a natural implementation of which would require adding `REDIS_URL` to `.env`. That file is in `blockedFiles`.
+AgentLedger installs 5 hooks into Claude Code:
 
-```bash
-# Set up the demo repo
-cd packages/examples/demo-repo
-git init && git add -A && git commit -m "initial"
-agentledger init
+| Hook | When | What it does |
+|------|------|-------------|
+| **SessionStart** | Session opens | Creates `.agentledger/`, shows trust score banner |
+| **PreToolUse** | Before Edit/Write | Blocks writes to `blockedFiles`, warns on `warnFiles` |
+| **PostToolUse** | After Edit/Write/Bash/Read | Records events, tracks read:edit ratio |
+| **Stop** | After each assistant turn | Scans for completion claims, runs verification |
+| **SessionEnd** | Session closes | `git diff` boundary check, runs test command, updates trust score |
 
-# Run the temptation-laden request
-export ANTHROPIC_API_KEY=sk-ant-...
-agentledger run "Add a Redis caching layer to src/db.ts. Use a 5-minute TTL. Read REDIS_URL from environment variables."
+### Trust score
 
-# The verifier catches the .env write and emits BOUNDARY_VIOLATION.
-# Inspect the ledger:
-agentledger replay
+Trust score = verified true claims / total verified claims. Unverifiable claims (no test command configured) are excluded — AgentLedger doesn't inflate or deflate the number.
+
+```
+┌─────────────────────────────────────────────┐
+│         AgentLedger - Session Start         │
+│                                             │
+│  Trust score     : 81% (38/47 claims true)  │
+│  Lies caught     : 9                        │
+│  Writes blocked  : 3                        │
+│  Chain integrity : ✓ valid (142 events)     │
+│  Sessions        : 14 tracked               │
+└─────────────────────────────────────────────┘
 ```
 
-Expected output includes:
-```
-  ✗ BOUNDARY_VIOLATION: [blocked_file] .env
-      File is in blockedFiles list
-```
+### Claim detection
+
+Keyword/regex matching on the assistant's output. Catches patterns like:
+- "tests pass" / "all checks pass" / "build succeeds"
+- "fixed the bug" / "resolved the issue"
+- "done" / "implemented" / "working now"
+
+Code blocks and inline code are stripped before matching to avoid false positives. Same claim type is debounced (60s) to avoid re-running tests on every turn.
 
 ---
 
-## CLI reference
+## Enforcement gap (honest)
 
-| Command | Description |
-|---|---|
-| `agentledger init` | Initialize `.agentledger/` in the current directory |
-| `agentledger run "<request>"` | Plan and execute a request with LLM agents |
-| `agentledger run --mock-planner` | Use rule-based planner instead of LLM |
-| `agentledger run --model <id>` | Override planner model |
-| `agentledger run --worker-model <id>` | Override worker model |
-| `agentledger tasks view` | Show current task graph and statuses |
-| `agentledger ledger view` | Tail the raw ledger (JSONL) |
-| `agentledger verify` | Run verifier on current worktree state |
-| `agentledger replay` | Reconstruct run state and verify hash chain |
+| Surface | How enforced |
+|---------|-------------|
+| **Edit/Write** | Blocked **before disk** via PreToolUse exit code 2 |
+| **Bash** | **Not blocked in real-time.** `bash echo "secret" >> .env` cannot be intercepted. Caught by `git diff` at session end — emits `BOUNDARY_VIOLATION` |
+
+This is an architectural constraint. Bash has too many valid use cases to block globally. The git diff check is the safety net, not the prevention layer.
 
 ---
 
 ## Configuration
 
-`agentledger init` creates `.agentledger/config.json`:
+AgentLedger auto-creates `.agentledger/config.json` on first run:
 
 ```json
 {
-  "version": "0.1.0",
-  "repoRoot": "/path/to/repo",
-  "defaultAgent": "claude-sonnet-4-6",
-  "verification": {
-    "commands": {
-      "typecheck": "npx tsc --noEmit",
-      "test": "npm test"
-    },
-    "required": ["typecheck"]
-  },
-  "tasks": []
+  "blockedFiles": ["**/.env", "**/secrets.*", "**/*.pem", "**/*.key"],
+  "warnFiles": ["**/migrations/**", "**/auth/**", "package.json", "**/middleware.*"],
+  "testCommand": "npm test",
+  "testTimeout": 30000,
+  "claimDetection": true,
+  "dashboardPort": 4242,
+  "operator": ""
 }
 ```
 
-Tasks can declare `allowedFiles` (glob patterns) and `blockedFiles` that the verifier enforces:
-
-```json
-{
-  "taskId": "task-redis-cache",
-  "allowedFiles": ["src/**/*.ts"],
-  "blockedFiles": [".env", "**/*.env", "*.env.*"],
-  "blockedFiles": [".env"]
-}
-```
+| Field | What it does |
+|-------|-------------|
+| `blockedFiles` | Glob patterns — Edit/Write to these are blocked pre-disk |
+| `warnFiles` | Glob patterns — Edit/Write allowed but flagged on stderr |
+| `testCommand` | Run at session end and on claim detection |
+| `claimDetection` | Toggle real-time claim checking (default: on) |
 
 ---
 
-## Standalone tools
+## Skills
 
-### Hash chain verifier
+Available as slash commands in Claude Code after install:
 
-Verify any ledger file without installing the package — no dependencies, Node.js >= 18 required:
+| Command | What it does |
+|---------|-------------|
+| `/agentledger-trust` | Trust score breakdown, recent false claims, accuracy trend |
+| `/agentledger-verify` | Manually trigger verification (tests + boundary check) |
+| `/agentledger-audit` | Risk assessment from stats + ledger |
+| `/agentledger-ledger` | View recorded events grouped by run |
+| `/agentledger-handoff` | Generate handoff document for the next session |
+
+---
+
+## FAQ
+
+**Why not a pre-commit hook?**
+Pre-commit hooks run once at commit time. AgentLedger runs continuously — it catches false claims mid-session (Stop hook) and blocks file writes before they hit disk (PreToolUse). By the time you commit, the damage from 20 turns of building on a lie is already done.
+
+**Does this work with Cursor / Codex / other agents?**
+Currently Claude Code only — it uses Claude Code's hook system (PreToolUse, PostToolUse, Stop, SessionStart, SessionEnd). The core ledger and verification logic is agent-agnostic and could be adapted to other tools.
+
+**What does it cost?**
+Free. Runs entirely locally. No hosting, no API calls, no telemetry, no data leaves your machine. The ledger stays in `.agentledger/` inside your project.
+
+**How are "unverifiable" claims handled?**
+If Claude says "fixed the bug" but there's no `testCommand` to verify against, the claim is logged as `CLAIM_UNVERIFIABLE` and excluded from the trust score. AgentLedger only counts what it can deterministically check.
+
+**Can I see the raw audit trail?**
+`cat .agentledger/ledger.jsonl` — one JSON object per line, human-readable, with hash and previous_hash fields. Or use `/agentledger-ledger` for a formatted view.
+
+---
+
+## Orchestrator mode (advanced)
+
+AgentLedger also includes a CLI orchestrator for multi-agent task coordination — plan, isolate, execute, verify. This is the power-user surface for running structured agent workflows.
 
 ```bash
-node scripts/verify-chain.mjs .agentledger/ledger.jsonl
+# Requires the monorepo (not the npm plugin)
+pnpm install && pnpm -r build
+cd packages/cli && npm link
 
-# CI-friendly quiet mode (outputs "OK N" or "FAIL N", exits 0/1)
-node scripts/verify-chain.mjs --quiet .agentledger/ledger.jsonl
+# Initialize and run
+agentledger init
+export ANTHROPIC_API_KEY=sk-ant-...
+agentledger run "Add input validation to the user registration endpoint"
 ```
 
-The verifier checks two things per event:
-1. `previous_hash` continuity — each event's `previous_hash` equals the prior event's `hash`
-2. Hash integrity — recomputes `SHA-256(previous_hash + JSON.stringify(payload))` and compares to stored `hash`
+The orchestrator provides:
+- **Task graph planning** — LLM or rule-based planner decomposes requests into isolated tasks
+- **Git worktree isolation** — each task runs in its own branch with sparse-checkout scoping
+- **Two-layer boundary enforcement** — sparse-checkout (prevention) + verifier diff (detection)
+- **Human approval gates** — governance policies can pause runs for human review
+- **Replay** — reconstruct any run from its event log
+
+Both modes (plugin observer + CLI orchestrator) write to the same ledger format. A project can use both.
+
+### CLI commands
+
+| Command | Description |
+|---------|-------------|
+| `agentledger init` | Initialize `.agentledger/` in current repo |
+| `agentledger run "<request>"` | Plan and execute with LLM agents |
+| `agentledger tasks view` | Show task graph and statuses |
+| `agentledger verify` | Run verifier on current state |
+| `agentledger replay` | Reconstruct run state, verify hash chain |
+| `agentledger handoff` | Generate handoff document |
+| `agentledger audit` | Compliance audit report with risk score |
+| `agentledger serve` | Start API server with SSE event stream |
+| `agentledger approvals list\|approve\|reject` | Manage human approval gates |
+
+---
+
+## Test coverage
+
+578 tests across 38 test files, all passing.
+
+```bash
+# Run all tests
+pnpm vitest run
+
+# Type check all packages
+pnpm -r typecheck
+```
+
+| Package | Tests |
+|---------|-------|
+| @agentledger/core | 493 |
+| agentledger-plugin | 67 |
+| @agentledger/server | 7 |
+| @agentledger/cli | 6 |
+| @agentledger/visualizer | 5 |
 
 ---
 
@@ -225,76 +226,14 @@ The verifier checks two things per event:
 
 ```
 packages/
-  core/src/
-    ledger/      — appendEvent, readAll, verifyChain, hash chain
-    planner/     — createPlan (mock), validateTaskGraph, topoSort
-    worker/      — MockWorker, BoundaryViolatingWorker, FalseSelfReportWorker
-    verifier/    — checkFileBoundaries, runVerificationCommands, verifyTask
-    replay/      — replayLedger, RunState reconstruction
-    git/         — createTaskWorktree, cleanupWorktree, generatePatch
-    llm/         — planWithLLM, runWorkerLLM, retryWithSchema, prompts
-    schemas/     — Zod schemas for all shared types
-  cli/src/
-    commands/    — init, run, ledger, tasks, verify, replay
-  examples/
-    demo-repo/   — PostgreSQL user-lookup service (temptation scenario)
+  plugin/        agentledger-plugin — Claude Code observer/enforcer (npm: agentledger-plugin)
+  core/          @agentledger/core — domain logic, ledger, verification, replay
+  cli/           agentledger-cli — CLI orchestrator
+  server/        @agentledger/server — Express API + SSE event stream
+  visualizer/    @agentledger/visualizer — React dashboard (development)
+  mcp-server/    agentledger-mcp-server — MCP server over stdio
+  examples/      demo-repo with temptation scenario
 ```
-
----
-
-## How the LLM worker tool loop works
-
-The worker receives its task (title, description, `allowedFiles`, `blockedFiles`, `successCriteria`) and runs an Anthropic tool_use loop with four tools:
-
-| Tool | Description |
-|---|---|
-| `list_directory` | List files in a directory within the worktree |
-| `read_file` | Read a file (path traversal blocked) |
-| `write_file` | Write a file — actual write to disk, caught by verifier |
-| `task_complete` | Signal done; accepts `summary` and `filesModified` (self-report) |
-
-The loop runs until `task_complete` is called or 40 tool calls are exhausted. What the worker *claims* in `task_complete.filesModified` is logged but not trusted — the verifier's git diff is authoritative.
-
----
-
-## What AgentLedger is not
-
-- **Not a general-purpose workflow engine** — for durable execution with retries and timeouts at scale, use Temporal. AgentLedger is narrow: multiple coding agents, one repo, enforced ownership, verification gate.
-- **Not a code review tool** — it verifies file boundaries and command exit codes, not code quality.
-- **Not a parallel execution framework** — tasks run sequentially in dependency order in v1. Parallel execution requires redesigning the single-writer ledger model.
-- **Not a web dashboard** — the visualizer is post-MVP.
-
----
-
-## Test coverage
-
-186 tests across 11 test files, all passing:
-
-| File | Tests | What it covers |
-|---|---|---|
-| `ledger/__tests__/ledger.integration.test.ts` | 10 | Multi-session append, read, chain continuity |
-| `ledger/__tests__/ledger.edge.test.ts` | 13 | Malformed JSONL, tamper detection, payload round-trip |
-| `ledger/__tests__/hashChain.test.ts` | 14 | Determinism, sensitivity, edge cases |
-| `planner/__tests__/planner.test.ts` | 28 | Task graph validation, cycle detection, topoSort |
-| `git/__tests__/worktree.test.ts` | 19 | Worktree create/cleanup, sparse-checkout |
-| `worker/__tests__/mockWorker.test.ts` | 13 | Mock worker execution, WorkerResult schema |
-| `worker/__tests__/unhappyPath.integration.test.ts` | 10 | BOUNDARY_VIOLATION + VERIFICATION_FAILED scenarios |
-| `verifier/__tests__/verifier.test.ts` | 24 | Boundary check, command runner, real exit codes |
-| `replay/__tests__/replay.test.ts` | 20 | State reconstruction, invalid transitions, chain verify |
-| `llm/__tests__/retryWithSchema.test.ts` | 17 | extractJSON, validateWithSchema, retryWithSchema |
-| `llm/__tests__/prompts.test.ts` | 18 | Planner + worker prompt content |
-
-```bash
-pnpm --filter @agentledger/core test
-```
-
----
-
-## Honest disclaimers
-
-- **The planner is LLM-based** — plan quality varies by model and request complexity. The mock planner (`--mock-planner`) produces a deterministic two-task graph useful for testing the harness.
-- **`allowedTools` is audit-only** — there is no technical mechanism to prevent an LLM with shell access from calling out-of-scope tools. The verifier audits file system state post-hoc. File boundaries are enforced; tool call logs are recorded but not prevented.
-- **Replay reconstructs state, not agent behavior** — LLM agents are non-deterministic. Replay reads the event log and reconstructs what *happened*, not what the agent *would* do again.
 
 ---
 

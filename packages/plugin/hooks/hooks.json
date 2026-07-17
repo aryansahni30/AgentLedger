@@ -1,5 +1,5 @@
 {
-  "description": "AgentLedger plugin — observer/enforcer mode. Records file writes to a hash-chained ledger, blocks writes to protected files (PreToolUse), detects Bash boundary violations at session end (git diff), and runs tests at SessionEnd.",
+  "description": "AgentLedger — the trust layer for AI coding agents. Catches false completion claims in real-time, blocks protected file writes, and tracks claim accuracy across sessions.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/hooks/session-start.js",
+            "command": "node dist/session-start.cjs",
             "timeout": 15
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/hooks/pre-tool-use.js",
+            "command": "node dist/pre-tool-use.cjs",
             "timeout": 10
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/hooks/post-tool-use.js",
+            "command": "node dist/post-tool-use.cjs",
             "timeout": 10
           }
         ]
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/hooks/stop.js",
+            "command": "node dist/stop.cjs",
             "timeout": 45
           }
         ]
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/hooks/session-end.js",
+            "command": "node dist/session-end.cjs",
             "timeout": 120
           }
         ]

@@ -1,20 +1,50 @@
 {
   "name": "agentledger-plugin",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
   "type": "module",
-  "description": "AgentLedger Claude Code plugin — observer/enforcer mode",
+  "description": "The trust layer for AI coding agents. Catches false completion claims in real-time, blocks protected file writes, and tracks claim accuracy across sessions. Claude Code plugin.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aryansahni/AgentLeader",
+    "directory": "packages/plugin"
+  },
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "ai-agent",
+    "trust",
+    "verification",
+    "claim-detection",
+    "agentledger",
+    "coding-agent",
+    "guardrails"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "build": "echo 'No build step — plain ESM scripts'",
-    "test": "vitest run"
+    "build": "node build.js",
+    "test": "vitest run",
+    "prepublishOnly": "node build.js"
   },
+  "bin": {
+    "agentledger-plugin": "./install.js"
+  },
+  "files": [
+    "dist/",
+    "install.js",
+    "build.js",
+    "hooks/hooks.json",
+    "skills/",
+    "PLUGIN_README.md"
+  ],
   "devDependencies": {
-    "vitest": "^2.0.0"
-  },
-  "dependencies": {
     "@agentledger/core": "workspace:*",
     "@agentledger/server": "workspace:*",
+    "esbuild": "^0.25.0",
     "minimatch": "^10.2.5",
-    "proper-lockfile": "^4.1.2"
+    "proper-lockfile": "^4.1.2",
+    "vitest": "^2.0.0"
   }
 }

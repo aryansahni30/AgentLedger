@@ -1,8 +1,16 @@
 {
   "name": "@agentledger/core",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "description": "Core domain logic for AgentLedger — hash-chained ledger, task graph, verification, replay, governance.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aryansahni/AgentLeader",
+    "directory": "packages/core"
+  },
+  "keywords": ["agentledger", "ledger", "verification", "ai-agent", "hash-chain"],
+  "engines": { "node": ">=18" },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -11,11 +19,13 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": ["dist/"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

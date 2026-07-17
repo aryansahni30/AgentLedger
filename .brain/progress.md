@@ -279,11 +279,74 @@ Architecture doc: `.brain/plugin-v2-plan.md`
 
 **67 total plugin tests across 9 test files — all passing**
 
+### Standalone Install Path ✅
+Architecture doc: prompt file (not in .brain/)
+
+**Part 1: esbuild Bundling ✅**
+- [x] `build.js` — esbuild bundles each hook entry point + all deps (zod, minimatch, proper-lockfile, @agentledger/core) into self-contained CJS files under `dist/`
+- [x] CJS format chosen — `proper-lockfile` uses CommonJS `require()` internally; ESM shim throws
+- [x] `import.meta.url` polyfill via esbuild banner: `var import_meta_url = require('url').pathToFileURL(__filename).href;`
+- [x] Zero external dependencies — bundles run standalone with no `node_modules`
+- [x] Source ESM scripts still work for monorepo dev; CJS bundles for standalone install
+- [x] Bundle size: ~1.1-1.2 MB per hook (mostly zod)
+- [x] `hooks/hooks.json` updated to point to `dist/*.cjs` files
+
+**Part 2: Automated Skills Installation ✅**
+- [x] `session-start.js` → `installSkills()` runs on every session start
+- [x] Installs to `~/.claude/skills/agentledger-{name}/SKILL.md` (directory + SKILL.md format Claude Code indexes)
+- [x] Idempotent — skips identical files, never clobbers user-customized versions
+- [x] Resolves skill source from both `scripts/../skills/` (ESM dev) and `dist/skills/` (bundled install)
+- [x] 5 skills: ledger, verify, audit, handoff, trust
+
+**Part 3: Dashboard Graceful Degradation ✅**
+- [x] `server-manager.js` rewritten — `ensureServerRunning()` returns `{ running: boolean, port: number }`
+- [x] Port read from `config.json` `dashboardPort` field (default 4242)
+- [x] Server spawn searches multiple paths: bundled `dist/server.cjs` first, monorepo `server/dist/main.js` fallback
+- [x] Banner conditionally shows URL (when server running) or "not running" (when not)
+- [x] `summary.js` → `formatSummary()` accepts `dashboardStatus` parameter
+- [x] `DEFAULT_CONFIG` extended: `testTimeout: 30000`, `dashboardPort: 4242`
+
+**Part 4: Install Script ✅**
+- [x] `install.js` — single-command installer: `node install.js`
+- [x] Merges hooks into `~/.claude/settings.json` — preserves existing hooks from other plugins
+- [x] JSONC parsing — handles `//` comments in settings files without breaking `https://` URLs
+- [x] Detects and replaces old AgentLedger hook entries (case-insensitive path matching)
+- [x] Installs skills via same `installSkills()` logic
+- [x] `package.json` `bin.agentledger-install` for `npx agentledger-install`
+- [x] `"private": true` removed — package is publishable
+
+**Part 5: Fresh Install Simulation ✅**
+- [x] Created fresh git repo in /tmp with trivial package.json + test script
+- [x] All hooks fire correctly standalone (no workspace, no node_modules)
+- [x] Boundary block: `.env` write → exit 2 ✓
+- [x] Normal edit: allowed → exit 0 ✓
+- [x] Post-tool-use: creates run, records TOOL_CALLED ✓
+- [x] Session-end: runs `npm test`, prints PASSED/FAILED summary ✓
+- [x] Ledger events: 6 events recorded with correct types and actors ✓
+- [x] Edit-without-read warning: fires correctly ✓
+- [x] Dashboard: "not running" when server unavailable (no crash) ✓
+- [x] Config auto-created with all v2 fields ✓
+
+**New/modified files:**
+- `build.js` — NEW: esbuild bundler script
+- `install.js` — NEW: single-command installer
+- `package.json` — MODIFIED: build script, bin entry, removed private flag
+- `hooks/hooks.json` — MODIFIED: points to dist/*.cjs
+- `scripts/hooks/session-start.js` — MODIFIED: skill auto-install, dashboard conditional
+- `scripts/server-manager.js` — MODIFIED: returns status, configurable port, multi-path server search
+- `scripts/summary.js` — MODIFIED: conditional dashboard URL
+- `scripts/verifier.js` — MODIFIED: suppress git stderr
+- `__tests__/summary.test.js` — MODIFIED: dashboard conditional test
+- `__tests__/session-start.test.js` — MODIFIED: dashboard status test
+
+**67 total plugin tests across 9 test files — all passing**
+**537 total tests across monorepo — all passing (5 pre-existing failures in visualizer + 2 core test files unchanged)**
+
 ---
 
 ## Blockers
 
-None currently (pre-build).
+None currently.
 
 ---
 

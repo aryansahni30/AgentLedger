@@ -59,6 +59,7 @@ export function getChangedFiles(projectDir) {
       cwd: projectDir,
       encoding: "utf8",
       timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
     });
     return output
       .split("\n")

@@ -68,8 +68,9 @@ describe("session-start hook", () => {
     expect(after.operator).toBe("alice");
   });
 
-  it("prints dashboard URL in stdout", () => {
+  it("prints dashboard status in stdout", () => {
     const result = runHook(tmpDir);
-    expect(result.stdout).toContain("localhost:4242");
+    // Dashboard line always present (either URL if running, or "not running")
+    expect(result.stdout).toContain("Dashboard");
   });
 });

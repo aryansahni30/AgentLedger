@@ -10,6 +10,36 @@ A Claude Code plugin that silently watches every session — recording file writ
 
 No further configuration needed to get started.
 
+## Hook Registration
+
+The **SessionStart** hook should be registered in `~/.claude/settings.json` (global) rather than `.claude/settings.json` (project-level). Global hooks run after project hooks, so the AgentLedger summary always appears last in the terminal — after other plugin banners (claude-mem, etc.).
+
+The remaining hooks (PreToolUse, PostToolUse, SessionEnd) stay in the project-level `.claude/settings.json` since they are per-project.
+
+```jsonc
+// ~/.claude/settings.json (global) — SessionStart only
+{
+  "hooks": {
+    "SessionStart": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node /path/to/packages/plugin/scripts/hooks/session-start.js",
+        "timeout": 15
+      }]
+    }]
+  }
+}
+
+// .claude/settings.json (project) — everything else
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": "Edit|Write", "hooks": [{ "type": "command", "command": "node /path/to/packages/plugin/scripts/hooks/pre-tool-use.js", "timeout": 10 }] }],
+    "PostToolUse": [{ "matcher": "Edit|Write|Bash", "hooks": [{ "type": "command", "command": "node /path/to/packages/plugin/scripts/hooks/post-tool-use.js", "timeout": 10 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "node /path/to/packages/plugin/scripts/hooks/session-end.js", "timeout": 120 }] }]
+  }
+}
+```
+
 ## What Happens Automatically
 
 | Event | What AgentLedger Does |
