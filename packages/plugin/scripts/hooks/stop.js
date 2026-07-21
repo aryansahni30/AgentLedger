@@ -202,7 +202,7 @@ async function main() {
   // Read hook input
   let input;
   try {
-    const raw = fs.readFileSync("/dev/stdin", "utf8");
+    const raw = fs.readFileSync(0, "utf8");
     trace(`stdin: ${raw.length} bytes, keys=${Object.keys(JSON.parse(raw)).join(",")}`);
     if (DEBUG) fs.writeFileSync(path.join(projectDir, ".agentledger", "last-stop-payload.json"), raw);
     input = JSON.parse(raw);

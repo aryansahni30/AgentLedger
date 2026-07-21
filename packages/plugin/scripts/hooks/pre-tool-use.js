@@ -111,7 +111,7 @@ async function main() {
   // Read hook input from stdin
   let input;
   try {
-    const raw = fs.readFileSync("/dev/stdin", "utf8");
+    const raw = fs.readFileSync(0, "utf8");
     input = JSON.parse(raw);
   } catch {
     // Malformed input — allow the tool call to proceed
