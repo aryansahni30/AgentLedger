@@ -8,11 +8,9 @@ Claude says done. AgentLedger checks — against real exit codes, not self-repor
 
 [![npm version](https://img.shields.io/npm/v/agentledger-plugin.svg?style=flat-square&logo=npm&label=npm)](https://www.npmjs.com/package/agentledger-plugin)
 [![CI](https://img.shields.io/github/actions/workflow/status/aryansahni30/AgentLeader/ci.yml?style=flat-square&logo=github&label=ci)](https://github.com/aryansahni30/AgentLeader/actions/workflows/ci.yml)
-[![license: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![node](https://img.shields.io/node/v/agentledger-plugin.svg?style=flat-square&logo=nodedotjs&logoColor=white)](package.json)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](https://github.com/aryansahni30/AgentLeader/blob/main/LICENSE)
+[![node](https://img.shields.io/node/v/agentledger-plugin.svg?style=flat-square&logo=nodedotjs&logoColor=white)](https://github.com/aryansahni30/AgentLeader/blob/main/package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-
-[Quickstart](#quickstart) · [How it works](#how-it-works) · [Claude Code plugin](#use-in-claude-code) · [CLI](#use-from-the-cli) · [Configuration](#configuration)
 
 </div>
 
@@ -112,9 +110,6 @@ The plugin is the primary surface. Install it via the marketplace (above) and it
 
 **Dashboard** — the SessionStart hook serves a local dashboard at `http://localhost:4242`: trust score over time, per-session claim accuracy, the event stream, and a cross-project view.
 
-![AgentLedger dashboard](docs/dashboard.png)
-<!-- placeholder — drop a real screenshot at docs/dashboard.png -->
-
 ## Use from the CLI
 
 For power users, AgentLedger also ships an orchestrator that coordinates agents through the same ledger and verification gate — independent of Claude Code.
@@ -177,8 +172,6 @@ Every event is appended to `.agentledger/ledger.jsonl` with a rolling SHA-256 `h
 | `BOUNDARY_VIOLATION` | A write landed outside the allowed file boundary |
 | `RUN_COMPLETED` / `RUN_FAILED` | Terminal run state |
 
-Full event union: [`packages/core/src/schemas/index.ts`](packages/core/src/schemas/index.ts).
-
 ## Enforcement model
 
 AgentLedger uses two layers, and is deliberate about which is which.
@@ -200,20 +193,10 @@ Bash commands are not parsed at runtime, so a shell-originated write can hit dis
 
 **Does it slow down my sessions?** Verification only runs when a completion claim is actually detected, and repeated claims of the same type are debounced (60s) so tests don't re-run every turn. Recording events is a local append. There's no network round-trip.
 
-## Development
+## Repository
 
-```bash
-pnpm install
-pnpm typecheck
-pnpm test
-```
-
-Monorepo layout (pnpm workspaces): `packages/core` (ledger, schemas, verifier, replay), `packages/cli`, `packages/plugin`, `packages/server` + `packages/visualizer` (dashboard), `packages/mcp-server`.
-
-## Contributing
-
-Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run tests and propose changes, and [SECURITY.md](SECURITY.md) to report a vulnerability.
+Source, CLI, and dashboard live in the [AgentLedger monorepo](https://github.com/aryansahni30/AgentLeader). Issues and PRs welcome; see [CONTRIBUTING.md](https://github.com/aryansahni30/AgentLeader/blob/main/CONTRIBUTING.md) and [SECURITY.md](https://github.com/aryansahni30/AgentLeader/blob/main/SECURITY.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/aryansahni30/AgentLeader/blob/main/LICENSE).

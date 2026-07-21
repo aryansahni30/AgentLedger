@@ -1,6 +1,6 @@
 {
   "name": "agentledger-plugin",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "The trust layer for AI coding agents. Catches false completion claims in real-time, blocks protected file writes, and tracks claim accuracy across sessions. Claude Code plugin.",
   "license": "MIT",
@@ -38,6 +38,7 @@
     "hooks/hooks.json",
     "skills/",
     "install.js",
+    "README.md",
     "PLUGIN_README.md"
   ],
   "devDependencies": {
