@@ -7,7 +7,6 @@
 Claude says done. AgentLedger checks — against real exit codes, not self-reports.
 
 [![npm version](https://img.shields.io/npm/v/agentledger-plugin.svg?style=flat-square&logo=npm&label=npm)](https://www.npmjs.com/package/agentledger-plugin)
-[![CI](https://img.shields.io/github/actions/workflow/status/aryansahni30/AgentLedger/ci.yml?style=flat-square&logo=github&label=ci)](https://github.com/aryansahni30/AgentLedger/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![node](https://img.shields.io/node/v/agentledger-plugin.svg?style=flat-square&logo=nodedotjs&logoColor=white)](package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)

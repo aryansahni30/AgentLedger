@@ -1,7 +1,16 @@
 node_modules/
 dist/
 .DS_Store
+**/.DS_Store
 *.js.map
 *.d.ts.map
 .agentledger/
 .env
+
+# compiled TS output emitted alongside source (some packages build in place)
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts.map
+# incremental build info (regenerated, never source)
+*.tsbuildinfo

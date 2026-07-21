@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AgentLedger — a CLI-first, TypeScript monorepo that coordinates AI coding agents through an append-only task ledger, git-worktree-isolated ownership boundaries, and a verification gate. **Portfolio-first** project; the harness is the engineering contribution, not the planner.
 
-Full brief: `AgentLedger_brief.md`  
+Full brief: `docs/AgentLedger_brief.md`  
 Architecture, schemas, decisions, and progress: `.brain/`
 
 ---
@@ -140,7 +140,7 @@ type WorkerResult = {
 };
 ```
 
-Full event type union and remaining types are in `AgentLedger_brief.md` §12.
+Full event type union and remaining types are in `docs/AgentLedger_brief.md` §12.
 
 ---
 
