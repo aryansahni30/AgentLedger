@@ -1,0 +1,20 @@
+{
+  "name": "agentledger",
+  "description": "The trust layer for AI coding agents. Catches false completion claims in real-time, blocks protected file writes, and tracks claim accuracy across sessions with a hash-chained audit ledger.",
+  "version": "0.3.0",
+  "author": {
+    "name": "Aryan Sahni"
+  },
+  "homepage": "https://github.com/aryansahni30/AgentLeader/tree/main/packages/plugin",
+  "repository": "https://github.com/aryansahni30/AgentLeader",
+  "license": "MIT",
+  "keywords": [
+    "trust",
+    "verification",
+    "claim-detection",
+    "audit",
+    "guardrails",
+    "security"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

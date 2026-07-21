@@ -10,7 +10,7 @@
  */
 
 import { build } from "esbuild";
-import { mkdirSync, cpSync, existsSync } from "fs";
+import { mkdirSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -66,20 +66,7 @@ for (const entry of hookEntryPoints) {
   console.log(`  bundled: dist/${outName}.cjs`);
 }
 
-// Copy skills directory into dist/ for install script access
-const skillsSrc = path.join(__dirname, "skills");
-const skillsDst = path.join(distDir, "skills");
-if (existsSync(skillsSrc)) {
-  mkdirSync(skillsDst, { recursive: true });
-  cpSync(skillsSrc, skillsDst, { recursive: true });
-  console.log("  copied:  dist/skills/");
-}
-
-// Copy hooks.json into dist/ for install script reference
-cpSync(
-  path.join(__dirname, "hooks", "hooks.json"),
-  path.join(distDir, "hooks.json")
-);
-console.log("  copied:  dist/hooks.json");
+// Skills (skills/<name>/SKILL.md) and hooks/hooks.json are loaded by Claude Code
+// directly from the plugin root at their canonical locations — no dist copy needed.
 
 console.log("\nPlugin build complete. All hooks are self-contained.");
