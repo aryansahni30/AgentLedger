@@ -58,7 +58,8 @@ describe("REST routes integration", () => {
       SEED_EVENTS.map((e) => JSON.stringify(e)).join("\n") + "\n",
       "utf8",
     );
-    handle = await createServer({ ledgerDir, port: 0 });
+    // Isolate from the real ~/.agentledger registry so only the seeded ledger is watched.
+    handle = await createServer({ ledgerDir, port: 0, registryFile: join(ledgerDir, "no-registry.json") });
   });
 
   afterAll(async () => {

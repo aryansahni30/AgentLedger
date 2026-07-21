@@ -35,7 +35,8 @@ function sessionStatePath() {
  *   filesRead: string[],
  *   filesEdited: string[],
  *   editWithoutRead: string[],
- *   falseClaims: Array<{ claim: string, actual: string, timestamp: string }>
+ *   falseClaims: Array<{ claim: string, actual: string, timestamp: string }>,
+ *   recentVerifications: Record<string, number>
  * }} SessionState
  */
 
@@ -58,6 +59,9 @@ const DEFAULT_STATE = () => ({
   filesEdited: [],
   editWithoutRead: [],
   falseClaims: [],
+  // claim type → epoch ms of last verification. Persisted rather than held in
+  // process memory because each hook invocation is a fresh process.
+  recentVerifications: {},
 });
 
 /**

@@ -89,15 +89,39 @@ describe("session-end hook", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("exits cleanly without ledger events when runId is null", () => {
-    writeConfig(tmpDir, { blockedFiles: ["**/.env"], testCommand: "echo ok" });
-    writeSession(tmpDir, { runId: null, dirty: true, sessionStart: new Date().toISOString() });
+  it("mints a run and prints the summary for a read-only session (dirty, no edits)", () => {
+    // testCommand is `exit 1` deliberately: if the suite were to run it would fail,
+    // proving the no-edit path must skip tests and pass on the boundary check alone.
+    writeConfig(tmpDir, { blockedFiles: ["**/.env"], testCommand: "exit 1" });
+    writeSession(tmpDir, {
+      runId: null,
+      dirty: true,
+      reads: 3,
+      edits: 0,
+      writes: 0,
+      sessionStart: new Date().toISOString(),
+    });
 
     const result = runHook(tmpDir);
 
     expect(result.status).toBe(0);
+
     const events = readLedger(tmpDir);
-    expect(events).toHaveLength(0);
+    const types = events.map((e) => e.event_type);
+    // A run is minted even though nothing was edited...
+    expect(types).toContain("RUN_CREATED");
+    // ...tests are skipped (no edits) so verification rides on the boundary check...
+    expect(types).toContain("VERIFICATION_PASSED");
+    expect(types).toContain("RUN_COMPLETED");
+    // ...and the configured `exit 1` command must NOT have run.
+    expect(types).not.toContain("VERIFICATION_FAILED");
+
+    const verification = events.find((e) => e.event_type === "VERIFICATION_PASSED");
+    expect(verification.payload.tests_run).toBe(false);
+
+    // The documented Session End box prints to stdout.
+    expect(result.stdout).toContain("Session End");
+    expect(result.stdout).toContain("Tests      : — (no edits)");
   });
 
   it("emits VERIFICATION_PASSED and RUN_COMPLETED when tests pass", () => {
@@ -122,6 +146,10 @@ describe("session-end hook", () => {
     expect(types).toContain("RUN_COMPLETED");
     expect(types).not.toContain("VERIFICATION_FAILED");
     expect(types).not.toContain("RUN_FAILED");
+
+    // Box prints, and because a file was edited the suite actually ran (exit 0).
+    expect(result.stdout).toContain("Session End");
+    expect(result.stdout).toContain("Tests      : exit 0");
   });
 
   it("emits VERIFICATION_FAILED and RUN_FAILED when tests fail", () => {

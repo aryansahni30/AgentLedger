@@ -15,6 +15,8 @@ packages/
       approvals/      shouldRequireApproval (policy), getPendingApprovals / isApproved / isRejected (state)
       git/            createTaskWorktree / cleanupWorktree (sparse-checkout)
       llm/            Anthropic + Together adapters, retryWithSchema, prompt builders
+      projects/       registry.ts — readRegistry / registerProject over ~/.agentledger/projects.json
+                      (canonical realpath key, basename identity, proper-lockfile writes)
   cli/                agentledger CLI — Commander.js
     src/commands/
       init.ts         agentledger init
@@ -35,17 +37,26 @@ packages/
       hooks.json        Hook matchers pointing to dist/*.cjs (SessionStart/PreToolUse/PostToolUse/Stop/SessionEnd)
     scripts/            Source ESM scripts (for monorepo dev; bundled to dist/ for standalone)
       state.js          readSessionState / writeSessionState / clearSessionState (proper-lockfile)
+      run-init.js       ensureRun(state, actor) — lazy RUN_CREATED + INTENT_COMPILED; shared by pre/post-tool-use + stop
+      (SessionStart)    registers the repo in ~/.agentledger/projects.json via core's registerProject
       server-manager.js ensureServerRunning() → { running, port }; configurable port from config.json
       summary.js        buildSessionSummary + formatSummary; conditional dashboard URL
       stats.js          readStats / writeStats / mergeSessionStats — persistent stats.json
       claim-detector.js detectClaims(text) — 8 regex patterns, 5 claim types, code-block stripping
       verifier.js       verify() — shared test runner + git diff boundary check
+      end-summary.js    writeLastSummary / readAndClearLastSummary (persist + show-once replay of the
+                        Session End box) + renderCheckpointBox (live compaction banner). See ADR-023.
       hooks/
-        session-start.js  Ensure .agentledger/ + config.json; install skills; start dashboard; print banner
+        session-start.js  Ensure .agentledger/ + config.json; install skills; start dashboard; print banner.
+                          Reads payload `source` from stdin: replays the persisted End box (clear/startup/
+                          resume) or renders a live checkpoint (compact) into systemMessage. See ADR-023.
         pre-tool-use.js   Layer 1: blockedFiles → exit(2) block; warnFiles → stderr warning
         post-tool-use.js  Lazy run init (first Edit/Write → RUN_CREATED observed); Read/Edit/Write/Bash tracking
-        stop.js           Real-time claim detection: scan assistant message, verify claims, surface discrepancies
-        session-end.js    Layer 2: git diff + test command; stats merge; trust delta; enhanced summary
+        stop.js           Real-time claim detection: read last_assistant_message, verify claims, surface discrepancies.
+                          Gated on any tool call (not edits) and lazy-inits its own run — a run-tests-and-report
+                          turn edits nothing, and is the most common claim there is.
+        session-end.js    Layer 2: git diff + test command; stats merge; trust delta; enhanced summary.
+                          Persists the box via writeLastSummary (SessionEnd stdout is swallowed by the host).
     skills/             5 slash commands (ledger, verify, audit, handoff, trust) — standalone, no CLI dependency
     dist/               Bundled CJS files — zero external dependencies, runs standalone without workspace
       *.cjs             Self-contained hook bundles (zod + minimatch + proper-lockfile + core inlined)
@@ -54,18 +65,24 @@ packages/
     src/
       services/
         fileWatcher.ts   FileWatcher — fs.watch + 100ms debounce + line-count tracking + _reading guard
+        ledgerRegistry.ts LedgerRegistry — one tagging FileWatcher per registered project + watches the
+                          registry file for projects appearing live. Emits TaggedEvent (LedgerEvent + project).
+                          projectSummaries(): per-project eventCount/sessionCount + per-ledger chainValid.
         sseManager.ts    SSEManager — Map<id, Response>; replay on addClient(); broadcast() to all
       routes/
-        runs.ts          GET /api/runs, GET /api/runs/:runId — replayLedger per run
-        leaderboard.ts   GET /api/leaderboard — buildLeaderboard(events)
-        events.ts        GET /api/events (SSE), GET /api/events/stats (clientCount + eventCount)
-      index.ts           createApp() factory — mounts routers, creates LedgerReader
-      server.ts          createServer() — wires FileWatcher→eventStore→SSEManager; returns {port, close}
+        runs.ts          GET /api/runs, GET /api/runs/:runId — replay from tagged store, each run tagged w/ project
+        leaderboard.ts   GET /api/leaderboard — buildLeaderboard(all tagged events); cross-project by definition
+        events.ts        GET /api/events (SSE), /api/events/history (tagged store), /api/events/stats
+        projects.ts      GET /api/projects — selector options + per-project chain badge roll-up
+      index.ts           createApp() factory — routes read the shared tagged store; getProjectSummaries injected
+      server.ts          createServer() — LedgerRegistry→eventStore→SSEManager; binds 127.0.0.1; returns {port, close}
   visualizer/         @agentledger/visualizer — React 18 + Vite 5 SPA
     src/
       types.ts           Local mirrors of server response types (no core dependency)
       context/
         SSEContext.tsx   SSEProvider: single EventSource, Set<Listener> broadcast, connected boolean
+        ProjectContext.tsx ProjectProvider: fetch /api/projects, localStorage selection, SSE-refetch on new
+                          project, chain roll-up (allChainsValid + invalidChains). selected=null → All Projects.
       hooks/
         useSSE.ts        Subscribes via SSEContext — no direct EventSource per hook
         useRuns.ts       fetch /api/runs + 200ms debounced SSE refetch
@@ -78,8 +95,10 @@ packages/
         TaskCard.tsx     Single task with status, owner, allowedFiles
         EventFeed.tsx    Right panel: live scrolling event log
         Leaderboard.tsx  Risk score table sorted by score desc
-      App.tsx            CSS Grid layout; Runs / Leaderboard tab switching
-      main.tsx           Entry: StrictMode → SSEProvider → App
+        ProjectSelector.tsx Top-nav dropdown (All Projects + each) + chain-integrity roll-up badge
+      App.tsx            Aggregate band (all projects) + trend chart; session list/detail filtered by selected project
+      main.tsx           Entry: StrictMode → SSEProvider → ProjectProvider → App
+      Data split         Aggregate/trends = ALL projects (never filtered); session list/detail = selected project only
       styles/index.css   Dark theme, CSS custom properties
   mcp-server/         agentledger-mcp — MCP server over stdio
     src/

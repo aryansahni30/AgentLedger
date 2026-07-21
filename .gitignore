@@ -8,9 +8,16 @@ dist/
 .env
 
 # compiled TS output emitted alongside source (some packages build in place)
-packages/*/src/**/*.js
-packages/*/src/**/*.d.ts
-packages/*/src/**/*.js.map
-packages/*/src/**/*.d.ts.map
+**/src/**/*.js
+**/src/**/*.d.ts
+**/src/**/*.js.map
+**/src/**/*.d.ts.map
+# compiled config output (vitest/vite configs are authored in .ts)
+**/vitest.config.js
+**/vitest.config.d.ts
+**/vite.config.js
+**/vite.config.d.ts
+vitest.workspace.js
+vitest.workspace.d.ts
 # incremental build info (regenerated, never source)
 *.tsbuildinfo

@@ -6,6 +6,8 @@ export interface SessionMetrics {
   runId: string;
   goal: string;
   status: string;
+  /** repo this session belongs to; used only to filter the list, never the aggregate */
+  project?: string | undefined;
   operator?: string | undefined;
   startedAt?: string | undefined;
   completedAt?: string | undefined;
@@ -70,6 +72,7 @@ function computeSessionMetrics(
     runId: run.runId,
     goal: run.goal,
     status: resolveDisplayStatus(run, events),
+    project: run.project,
     operator: run.operator,
     startedAt: run.startedAt,
     completedAt: run.completedAt,
@@ -125,6 +128,10 @@ export function useAnalytics(): AnalyticsData {
     [runs, allEvents],
   );
 
+  // Aggregate and trends are computed from ALL sessions and are never scoped by
+  // the project filter — they answer "how much do I trust my agents overall,"
+  // which spans every repo. Only the session list (filtered in App) responds to
+  // the selector. Keep this the boundary of that split.
   const aggregate = useMemo<AggregateMetrics>(() => {
     let verified = 0;
     let falsified = 0;

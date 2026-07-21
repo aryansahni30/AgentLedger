@@ -40,6 +40,19 @@ export interface RunState {
   filesModified: string[];
   startedAt?: string;
   completedAt?: string;
+  /** basename of the repo this run belongs to; server-tagged for filtering */
+  project?: string;
+}
+
+/** One tracked project, from GET /api/projects — powers the selector + chain badge. */
+export interface ProjectSummary {
+  name: string;
+  path: string;
+  eventCount: number;
+  sessionCount: number;
+  chainValid: boolean;
+  chainError?: string;
+  lastActivity?: string;
 }
 
 export interface LeaderboardEntry {

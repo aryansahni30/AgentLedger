@@ -12,3 +12,4 @@ export * from "./context/index.js";
 export * from "./reassignment/index.js";
 export * from "./governance/index.js";
 export * from "./scheduler/index.js";
+export * from "./projects/index.js";

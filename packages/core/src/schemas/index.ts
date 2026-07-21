@@ -22,6 +22,13 @@ export const LedgerEventTypeSchema = z.enum([
   "VERIFICATION_PASSED",
   "VERIFICATION_FAILED",
   "BOUNDARY_VIOLATION",
+  // Lie Detector — emitted by the plugin's Stop hook on every assistant turn that
+  // makes a completion claim. CLAIM_DETECTED records the claim; the CLAIM_VERIFIED /
+  // CLAIM_FALSIFIED / CLAIM_UNVERIFIABLE that follows records what checking it found.
+  "CLAIM_DETECTED",
+  "CLAIM_VERIFIED",
+  "CLAIM_FALSIFIED",
+  "CLAIM_UNVERIFIABLE",
   "TASK_COMPLETED",
   "TASK_FAILED",
   "RUN_COMPLETED",
@@ -457,6 +464,27 @@ export const RunCreatedPayloadSchema = z.object({
   run_mode: RunModeSchema.default("orchestrated"),
 });
 
+/**
+ * One tracked repo in the cross-project registry (`~/.agentledger/projects.json`).
+ *
+ * `path` is the canonical realpath and is unique per entry — it is how the server
+ * locates the ledger. `name` is the basename and is the project *identifier* the
+ * API and UI use, matching claude-mem. Two repos with the same basename therefore
+ * share an identifier and their sessions interleave; both paths are still kept so
+ * neither ledger becomes unreadable.
+ */
+export const ProjectEntrySchema = z.object({
+  path: z.string().min(1),
+  name: z.string().min(1),
+  firstSeen: z.string(),
+  lastSeen: z.string(),
+});
+
+export const ProjectRegistrySchema = z.object({
+  version: z.literal(1),
+  projects: z.array(ProjectEntrySchema),
+});
+
 export const AgentLedgerConfigSchema = z.object({
   version: z.string(),
   verification: z.object({
@@ -526,3 +554,5 @@ export type ResumptionGuidance = z.infer<typeof ResumptionGuidanceSchema>;
 export type HandoffBrief = z.infer<typeof HandoffBriefSchema>;
 export type RunMode = z.infer<typeof RunModeSchema>;
 export type RunCreatedPayload = z.infer<typeof RunCreatedPayloadSchema>;
+export type ProjectEntry = z.infer<typeof ProjectEntrySchema>;
+export type ProjectRegistry = z.infer<typeof ProjectRegistrySchema>;

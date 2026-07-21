@@ -347,7 +347,7 @@ function buildContextSummary(
  * risks, and produces a contextSummary string formatted for pasting directly
  * into a new agent's context window.
  */
-export function generateHandoffBrief(events: LedgerEvent[], runId: string): HandoffBrief {
+export function generateHandoffBrief(events: readonly LedgerEvent[], runId: string): HandoffBrief {
   const state = replayLedger(events, runId);
   const runEvents = events.filter((e) => e.run_id === runId);
 

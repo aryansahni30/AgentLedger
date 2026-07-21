@@ -67,6 +67,14 @@ function humanize(event: LedgerEvent): HumanizedEvent | null {
         severity: "error",
         raw: event,
       };
+    case "CLAIM_DETECTED":
+      return {
+        icon: "◎",
+        label: `Claim detected: "${typeof p["claim_text"] === "string" ? p["claim_text"] : "..."}"`,
+        detail: p["verifiable"] === false ? "No test command — cannot be checked" : "Checking…",
+        severity: "info",
+        raw: event,
+      };
     case "CLAIM_VERIFIED":
       return {
         icon: "✓",

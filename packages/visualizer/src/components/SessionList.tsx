@@ -4,6 +4,8 @@ interface SessionListProps {
   sessions: SessionMetrics[];
   selectedRunId: string | null;
   onSelect: (runId: string) => void;
+  /** selected project name, or null for All Projects — labels the empty state */
+  scopeLabel?: string | null;
 }
 
 function formatTime(iso?: string): string {
@@ -80,14 +82,19 @@ export function SessionList({
   sessions,
   selectedRunId,
   onSelect,
+  scopeLabel = null,
 }: SessionListProps): React.ReactElement {
   if (sessions.length === 0) {
     return (
       <div className="session-list-empty">
         <div className="session-list-empty-icon">◇</div>
-        <div className="session-list-empty-text">No sessions yet</div>
+        <div className="session-list-empty-text">
+          {scopeLabel === null ? "No sessions yet" : `No sessions in ${scopeLabel}`}
+        </div>
         <div className="session-list-empty-hint">
-          Sessions appear as you use Claude Code with AgentLedger installed
+          {scopeLabel === null
+            ? "Sessions appear as you use Claude Code with AgentLedger installed"
+            : "Switch to All Projects to see sessions from other repos"}
         </div>
       </div>
     );

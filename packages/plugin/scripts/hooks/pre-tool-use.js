@@ -18,9 +18,9 @@
 
 import fs from "fs";
 import path from "path";
-import { randomUUID } from "crypto";
 import { minimatch } from "minimatch";
 import { readSessionState, writeSessionState } from "../state.js";
+import { ensureRun } from "../run-init.js";
 
 const projectDir = process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
 const configPath = path.join(projectDir, ".agentledger", "config.json");
@@ -68,58 +68,6 @@ function matchesBlocked(filePath, patterns) {
   return null;
 }
 
-/** @returns {string} */
-function loadOperator() {
-  try {
-    const raw = fs.readFileSync(configPath, "utf8");
-    const config = JSON.parse(raw);
-    return config.operator || process.env["USER"] || "unknown";
-  } catch {
-    return process.env["USER"] ?? "unknown";
-  }
-}
-
-/**
- * Initialize a new observed run — writes RUN_CREATED + INTENT_COMPILED events.
- * Same pattern as post-tool-use.js lazy init.
- *
- * @param {string} runId
- * @returns {Promise<void>}
- */
-async function initRun(runId) {
-  const { LedgerWriter } = await import("@agentledger/core");
-  const writer = new LedgerWriter(ledgerPath);
-  const operator = loadOperator();
-
-  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-
-  await writer.appendEvent({
-    event_id: `evt_${Date.now()}_run_created`,
-    run_id: runId,
-    timestamp: new Date().toISOString(),
-    actor: "plugin:pre-tool-use",
-    event_type: "RUN_CREATED",
-    payload: {
-      goal: "Observed Claude Code session",
-      operator,
-      run_mode: "observed",
-    },
-  });
-
-  await writer.appendEvent({
-    event_id: `evt_${Date.now()}_intent`,
-    run_id: runId,
-    timestamp: new Date().toISOString(),
-    actor: "plugin:pre-tool-use",
-    event_type: "INTENT_COMPILED",
-    payload: {
-      goal: "Observed Claude Code session",
-      taskCount: 0,
-      tasks: [],
-    },
-  });
-}
-
 /**
  * Append a TOOL_DENIED event to the ledger.
  * If no run is active, lazy-inits one first (same as post-tool-use).
@@ -133,12 +81,9 @@ async function emitDenied(filePath, matchedPattern, toolName) {
   let state = await readSessionState();
 
   // Lazy run init if no active run
-  if (!state.runId) {
-    const runId = randomUUID();
-    await initRun(runId);
-    state = { ...state, runId, dirty: true };
-    await writeSessionState(state);
-  }
+  const priorRunId = state.runId;
+  state = await ensureRun(state, "plugin:pre-tool-use");
+  if (!priorRunId) await writeSessionState(state);
 
   try {
     const { LedgerWriter } = await import("@agentledger/core");
@@ -213,11 +158,7 @@ async function main() {
     // Emit TOOL_WARNED to ledger
     try {
       let state = await readSessionState();
-      if (!state.runId) {
-        const runId = randomUUID();
-        await initRun(runId);
-        state = { ...state, runId, dirty: true };
-      }
+      state = await ensureRun(state, "plugin:pre-tool-use");
       await writeSessionState({ ...state, warnings: (state.warnings ?? 0) + 1 });
 
       const { LedgerWriter } = await import("@agentledger/core");

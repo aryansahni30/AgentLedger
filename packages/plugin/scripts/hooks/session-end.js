@@ -17,12 +17,20 @@
 import fs from "fs";
 import path from "path";
 import { readSessionState, clearSessionState } from "../state.js";
+import { ensureRun } from "../run-init.js";
 import { readStats, mergeSessionStats } from "../stats.js";
 import { verify } from "../verifier.js";
+import { writeLastSummary } from "../end-summary.js";
 
 const projectDir = process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
 const ledgerPath = path.join(projectDir, ".agentledger", "ledger.jsonl");
 const configPath = path.join(projectDir, ".agentledger", "config.json");
+
+// Bound the test run well under the SessionEnd hook timeout (120s in hooks.json)
+// so the summary box always has headroom to print. A suite that ran to the hook
+// timeout would be SIGKILLed before console.log ever fired — the exact reason the
+// documented Session End box could silently never appear.
+const TEST_TIMEOUT_MS = 90_000;
 
 /** @returns {{ blockedFiles: string[], testCommand: string }} */
 function loadConfig() {
@@ -67,22 +75,51 @@ async function appendEvent(runId, eventType, payload) {
 }
 
 async function main() {
-  const state = await readSessionState();
+  let state = await readSessionState();
 
-  // No active run — nothing to verify
-  if (!state.runId || !state.dirty) {
+  // Skip only a session that did literally nothing. `dirty` is flipped true by
+  // post-tool-use on the first tool call of ANY kind (Read/Bash/Edit/Write), so a
+  // read-only or review session still prints its summary. The previous guard also
+  // required a runId — minted only on Edit/Write — so every no-edit session was
+  // silently skipped and the documented Session End box never rendered.
+  if (!state.dirty) {
     await clearSessionState();
     process.exit(0);
   }
 
   const { blockedFiles, testCommand } = loadConfig();
+
+  // Every summary needs a run to attach its VERIFICATION_*/RUN_* events to. A
+  // read-only session never triggered ensureRun elsewhere, so mint one here.
+  state = await ensureRun(state, "plugin:session-end");
   const runId = state.runId;
 
-  // Run verification using shared verifier module
-  console.log(`\n[agentledger] Running: ${testCommand || "(skipped)"}`);
-  const result = verify({ testCommand, blockedFiles, projectDir });
-  const { violations, testExitCode, testsPassed, boundaryClean } = result;
-  const verificationPassed = testsPassed && boundaryClean;
+  // Only shell the test suite when this session actually edited files. Nothing was
+  // changed otherwise, so there is nothing to re-verify — and running a full suite
+  // on every read-only session end is the slow path that hits the hook timeout and
+  // eats the summary. The boundary check (git diff) is cheap and always runs.
+  const editCount = (state.edits ?? 0) + (state.writes ?? 0);
+  const shouldRunTests = editCount > 0 && Boolean(testCommand);
+
+  console.log(
+    shouldRunTests
+      ? `\n[agentledger] Running: ${testCommand}`
+      : "\n[agentledger] No edits this session — verifying boundaries only"
+  );
+
+  const result = verify({
+    testCommand: shouldRunTests ? testCommand : "",
+    blockedFiles,
+    projectDir,
+    testTimeout: TEST_TIMEOUT_MS,
+  });
+  const { violations, testExitCode, testsPassed, boundaryClean, testTimedOut } = result;
+
+  // A skipped suite is neither pass nor fail — verification then rides on the
+  // boundary check alone. A timed-out suite is inconclusive and treated as
+  // not-passed so Status never falsely reports PASSED.
+  const testsOk = !shouldRunTests || (testsPassed && !testTimedOut);
+  const verificationPassed = testsOk && boundaryClean;
 
   // Build reason string for failed verification
   let verificationReason = "";
@@ -93,23 +130,28 @@ async function main() {
       detected_by: "git-diff",
     });
   }
-  if (!testsPassed) {
-    verificationReason = verificationReason
-      ? `${verificationReason}; TESTS_FAILED (exit ${testExitCode})`
-      : `TESTS_FAILED (exit ${testExitCode})`;
+  if (shouldRunTests && testTimedOut) {
+    const timeoutReason = `TESTS_TIMED_OUT (>${TEST_TIMEOUT_MS / 1000}s)`;
+    verificationReason = verificationReason ? `${verificationReason}; ${timeoutReason}` : timeoutReason;
+  } else if (shouldRunTests && !testsPassed) {
+    const failReason = `TESTS_FAILED (exit ${testExitCode})`;
+    verificationReason = verificationReason ? `${verificationReason}; ${failReason}` : failReason;
   }
 
   // Emit verification event
   if (verificationPassed) {
     await appendEvent(runId, "VERIFICATION_PASSED", {
-      test_command: testCommand,
-      exit_code: 0,
+      test_command: shouldRunTests ? testCommand : null,
+      tests_run: shouldRunTests,
+      exit_code: shouldRunTests ? 0 : null,
       boundary_violations: 0,
     });
   } else {
     await appendEvent(runId, "VERIFICATION_FAILED", {
-      test_command: testCommand,
-      exit_code: testExitCode,
+      test_command: shouldRunTests ? testCommand : null,
+      tests_run: shouldRunTests,
+      timed_out: shouldRunTests && testTimedOut,
+      exit_code: shouldRunTests ? testExitCode : null,
       boundary_violations: violations.length,
       reason: verificationReason,
     });
@@ -152,41 +194,55 @@ async function main() {
   const sessionClaims = (state.claimsVerifiedTrue ?? 0) + (state.claimsVerifiedFalse ?? 0) + (state.claimsUnverifiable ?? 0);
   const sessionFalse = state.claimsVerifiedFalse ?? 0;
 
-  // Print enhanced summary
-  console.log("");
-  console.log("╔═══════════════════════════════════════╗");
-  console.log("║       AgentLedger — Session End       ║");
-  console.log("╚═══════════════════════════════════════╝");
-  console.log(`  Status     : ${verificationPassed ? "✓ PASSED" : "✗ FAILED"}`);
+  // Build the enhanced summary as an array so it can be BOTH printed and
+  // persisted. SessionEnd stdout is swallowed by Claude Code (terminal is tearing
+  // down), so console.log alone is invisible. writeLastSummary persists the box for
+  // the next SessionStart to replay into a rendered systemMessage — see end-summary.js.
+  const box = [];
+  box.push("");
+  box.push("╔═══════════════════════════════════════╗");
+  box.push("║       AgentLedger — Session End       ║");
+  box.push("╚═══════════════════════════════════════╝");
+  box.push(`  Status     : ${verificationPassed ? "✓ PASSED" : "✗ FAILED"}`);
 
   if (sessionClaims > 0) {
-    console.log(`  Claims     : ${sessionClaims} made · ${state.claimsVerifiedTrue ?? 0} verified · ${sessionFalse} false`);
+    box.push(`  Claims     : ${sessionClaims} made · ${state.claimsVerifiedTrue ?? 0} verified · ${sessionFalse} false`);
   }
 
   if (violations.length > 0) {
-    console.log(`  Boundary   : ${violations.length} violation(s) detected`);
+    box.push(`  Boundary   : ${violations.length} violation(s) detected`);
     for (const v of violations) {
-      console.log(`    - ${v.file}  [${v.pattern}]`);
+      box.push(`    - ${v.file}  [${v.pattern}]`);
     }
   } else {
-    console.log("  Boundary   : ✓ clean");
+    box.push("  Boundary   : ✓ clean");
   }
-  console.log(`  Tests      : exit ${testExitCode}`);
-  console.log(`  Read:Edit  : ${readEditRatio}x (${readEditLabel})`);
+  const testsDisplay = !shouldRunTests
+    ? "— (no edits)"
+    : testTimedOut
+      ? `timeout (>${TEST_TIMEOUT_MS / 1000}s)`
+      : `exit ${testExitCode}`;
+  box.push(`  Tests      : ${testsDisplay}`);
+  box.push(`  Read:Edit  : ${readEditRatio}x (${readEditLabel})`);
 
   if (trustBefore !== null) {
     const delta = trustAfter - trustBefore;
     const arrow = delta > 0 ? "↑" : delta < 0 ? "↓" : "→";
-    console.log(`  Trust Δ    : ${trustBefore}% → ${trustAfter}%  ${arrow}`);
+    box.push(`  Trust Δ    : ${trustBefore}% → ${trustAfter}%  ${arrow}`);
   } else if (sessionClaims > 0) {
-    console.log(`  Trust      : ${trustAfter}% (first measurement)`);
+    box.push(`  Trust      : ${trustAfter}% (first measurement)`);
   }
 
   if ((state.editWithoutRead ?? []).length > 0) {
-    console.log(`  ⚠ Edited without reading: ${state.editWithoutRead.map((f) => path.basename(f)).join(", ")}`);
+    box.push(`  ⚠ Edited without reading: ${state.editWithoutRead.map((f) => path.basename(f)).join(", ")}`);
   }
 
-  console.log("");
+  box.push("");
+
+  const boxText = box.join("\n");
+  console.log(boxText);
+  // Persist so the next SessionStart can render it (the only reliably visible path).
+  writeLastSummary(projectDir, boxText);
 
   // Clear session state
   await clearSessionState();

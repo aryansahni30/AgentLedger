@@ -116,7 +116,7 @@ describe("SSE integration", () => {
     mkdirSync(ledgerDir, { recursive: true });
     ledgerPath = join(ledgerDir, "ledger.jsonl");
     writeFileSync(ledgerPath, SEED_EVENT + "\n", "utf8");
-    handle = await createServer({ ledgerDir, port: 0 });
+    handle = await createServer({ ledgerDir, port: 0, registryFile: join(ledgerDir, "no-registry.json") });
   });
 
   afterAll(async () => {

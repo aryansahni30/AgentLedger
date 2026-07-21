@@ -194,3 +194,109 @@ Format: **Decision** | **Alternatives considered** | **Why this** | **Date**
 **Why:** Self-contained bundles eliminate dependency resolution issues for end users. A Claude Code plugin should install and work with zero friction — no `pnpm install` in the plugin dir, no workspace links, no transitive dep conflicts. Bundle size (~1.1MB per hook) is acceptable for a CLI tool.
 
 **Date:** 2026-07-16
+
+---
+
+**Decision:** `LedgerEventTypeSchema` is the single contract between the plugin and core, and every event type any hook emits must be an enum member. Hooks report ledger append failures on stderr and never swallow them.
+
+**Alternatives:** Loosen `event_type` to `z.string()` so unknown types pass. Keep the bare `catch {}` and treat ledger writes as best-effort.
+
+**Why:** The Stop hook emitted `CLAIM_*` types that were never added to the enum, so `LedgerEventSchema.parse` threw on every append and a bare catch discarded the error. Detection ran, `session.json` incremented, the ledger stayed empty, and the plugin reported success for a release. Loosening the enum would have hidden the mismatch rather than caught it; the enum is what makes the ledger trustworthy. A verification tool that fails silently is worse than none, because it is believed. Contract tests now assert through the real `LedgerWriter` — mocked writers are what let this ship.
+
+**Date:** 2026-07-17
+
+---
+
+## ADR-017: Claim verification is gated on any tool call, not on file edits
+
+**Decision:** The Stop hook verifies a detected claim when the session has made any tool call (reads + edits + writes + bashCalls > 0), and lazy-inits its own run via the shared `ensureRun` when no Edit/Write has created one. Only a session with zero tool calls is skipped.
+
+**Alternatives:** Keep the `edits + writes > 0` gate and treat an edit-free turn as discussion. Gate on `bashCalls` alone (cheaper, still misses read-only claims).
+
+**Why:** The gate skipped every live session. "Run the tests and tell me the result" edits nothing, so `edits + writes` was 0 and the hook exited before verifying — a run-tests-and-report turn is the most common way an agent misreports, and it was the one case never checked. The hook's tests all passed because the fixture seeded `edits: 5` and a `runId`, reproducing neither live condition. A claim about a suite you ran but did not change is still a claim; a claim about a suite you never ran at all is the most suspect of the lot. Cost of the wider net is bounded by the existing 60s debounce.
+
+**Date:** 2026-07-17
+
+---
+
+## ADR-018: Cross-project registry keyed by canonical path, identified by basename
+
+**Decision:** Tracked repos live in `~/.agentledger/projects.json`, appended by SessionStart. Each entry's `path` is the canonical realpath (unique, locates the ledger); the project *identifier* used by the API and UI is the basename, matching claude-mem.
+
+**Alternatives:** Filesystem scan for `.agentledger/` dirs (rejected — slow, unbounded). Registry inside a ledger (rejected — circular; the registry is what finds the ledgers). Basename as the storage key (rejected — claude-mem's 23 basenames already include an empty string and collide).
+
+**Why:** A central file is the simplest thing that lets one server read many repos. realpath is mandatory, not hygiene: `/tmp` symlinks to `/private/tmp`, so the same repo arrives under two spellings and would register twice, each holding half the sessions. Basename identity is a deliberate collision tradeoff (two repos named `api` share an identifier and interleave) accepted for claude-mem parity; both paths are still kept so neither ledger is lost. Writes take a `proper-lockfile` lock — concurrent SessionStarts in different repos otherwise clobber each other, last-writer-wins.
+
+**Date:** 2026-07-17
+
+---
+
+## ADR-019: Aggregate stats span all projects; only the session list filters
+
+**Decision:** The trust score, trend chart, lies-caught / writes-blocked / claims-checked counters are computed across ALL projects regardless of the selected project. The project filter scopes only the session list and per-session detail. Filtering is client-side: the server serves every event tagged with its project, the UI computes the aggregate from all and `.filter()`s the list.
+
+**Alternatives:** Server-side `?project=` param (rejected — the aggregate needs all events anyway, so it would force a second unfiltered fetch to render one page). Scope the aggregate too (rejected — it answers "how much do I trust my agents overall," which spans every repo).
+
+**Why:** Aggregate and detail answer different questions; conflating them under one filter breaks the "overall trust" reading. Client-side filtering is one fetch, not two, and `useAnalytics` already loaded all events this way. The UI labels the band "across all projects" so the intentional non-response to the filter does not read as a bug.
+
+**Date:** 2026-07-17
+
+---
+
+## ADR-020: Chain integrity is verified per project and rolled up worst-case
+
+**Decision:** Hash chains are verified per ledger file. `/api/projects` reports each project's own `chainValid`; the cross-project badge shows valid only when every project verifies, and names the offenders otherwise.
+
+**Alternatives:** Merge all ledgers and verify one chain (rejected — impossible; the merged sequence is not a chain, `previous_hash` links are per-file). Show the badge only for a single selected project (rejected — a corrupt ledger stays invisible in the default All-Projects view). Drop chain info from the cross-project view (rejected — discards the signal that makes the ledger trustworthy).
+
+**Why:** Chains cannot be merged, so a global verdict has to be a roll-up of per-repo verdicts. Worst-case roll-up surfaces a broken chain anywhere — the thing most worth seeing — without implying a merged chain exists.
+
+**Date:** 2026-07-17
+
+---
+
+## ADR-021: The dashboard server binds 127.0.0.1
+
+**Decision:** `server.listen(port, "127.0.0.1")` — the API binds loopback only, not `0.0.0.0`.
+
+**Alternatives:** Keep the default all-interfaces bind (rejected).
+
+**Why:** The server now aggregates every tracked project's ledger — file paths, shell commands, goals, claims. The prior default bind exposed one project's ledger to the local network; unchanged, this feature would have exposed all of them. A local dashboard has no reason to accept off-host connections.
+
+**Date:** 2026-07-17
+
+---
+
+## ADR-022: SessionEnd summary prints for any session with tool activity, not only edit sessions
+
+**Decision:** The SessionEnd hook gates on `state.dirty` alone (true after the first tool call of any kind), lazily mints a run when one is absent, and runs the test suite only when files were edited. Its test timeout is bounded to 90s, under the 120s hook timeout.
+
+**Alternatives:** Keep the old `!state.runId || !state.dirty` guard (rejected — `runId` is only minted on Edit/Write, so every read-only/review session was silently skipped and the documented Session End box never appeared). Print the box before verification (rejected — Status/Tests/Boundary lines need the verify result). Always run the full suite (rejected — a long suite ran to the 120s hook timeout and was SIGKILLed before `console.log`, eating the box).
+
+**Why:** The README claims the box shows on session end; the code showed it only for edit sessions that also finished verification inside the timeout. Bounding the test timeout below the hook timeout guarantees the box prints; skipping tests on no-edit sessions removes the slow path entirely; a timed-out suite is now labeled "timeout", not a false "exit 1".
+
+**Date:** 2026-07-20
+
+---
+
+## ADR-023: Session End box is rendered by the NEXT SessionStart, not SessionEnd itself
+
+**Decision:** SessionEnd still `console.log`s its box but now also persists it to `.agentledger/last-session-summary.txt` (`scripts/end-summary.js`). SessionStart reads the hook payload `source` from stdin and, for `startup`/`resume`/`clear`, replays the persisted box into its `systemMessage` (then deletes the file so it renders once). For `source: "compact"` — which fires no SessionEnd — it renders a live checkpoint box from the current, un-cleared session state instead.
+
+**Alternatives:** Emit `systemMessage` from SessionEnd directly (rejected — Claude Code swallows SessionEnd hook stdout because the terminal is tearing down; verified empirically, obs 1291). Move the summary to the Stop hook (rejected — Stop fires every turn, wrong semantics). Keep only the file + `cat` (rejected — not automatic; user wants it on screen at clear/compact).
+
+**Why:** SessionStart stdout **is** rendered (via the `hookSpecificOutput`/`systemMessage` envelope) and `/clear` fires SessionEnd → SessionStart back-to-back, so replaying there paints the End box the instant you clear, and at the next launch after a hard quit. Compaction gets its own live banner alongside claude-mem's, matching the "add our banner at compact time" ask.
+
+**Date:** 2026-07-20
+
+---
+
+## ADR-024: SessionStart box ordering — win-the-race-by-losing via a tuned delay
+
+**Decision:** Bumped the SessionStart delay 100ms → `RENDER_LAST_DELAY_MS = 1500` (`scripts/hooks/session-start.js`) so the AgentLedger box renders *below* other plugins' SessionStart banners (notably claude-mem's "recent context").
+
+**Alternatives:** Keep 100ms (rejected — lost to claude-mem's health-poll + context-generation hook, so the box landed above it). Reorder hook registration in `~/.claude/settings.json` (rejected — cross-file/cross-plugin declaration order is not honored; observed order is completion-time, not config order). Poll claude-mem's worker health endpoint before emitting (rejected — couples us to another plugin's internals).
+
+**Why:** Claude Code runs SessionStart hooks concurrently and renders each hook's `systemMessage` in completion order. The 100ms delay already proved it pushes us past the fast hooks (caveman, ecc summary); claude-mem's context banner just finishes later (~0.15s+ warm), so a larger delay is the only lever in our own code to land last. Cost: +1.4s startup; a cold worker on the first post-reboot session may still push claude-mem later — raise the constant if so.
+
+**Date:** 2026-07-20

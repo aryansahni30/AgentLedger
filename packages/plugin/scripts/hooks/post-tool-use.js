@@ -25,65 +25,12 @@
 
 import fs from "fs";
 import path from "path";
-import { randomUUID } from "crypto";
 import { readSessionState, writeSessionState } from "../state.js";
+import { ensureRun } from "../run-init.js";
 
 const projectDir = process.env["CLAUDE_PROJECT_DIR"] ?? process.cwd();
 const ledgerPath = path.join(projectDir, ".agentledger", "ledger.jsonl");
 const configPath = path.join(projectDir, ".agentledger", "config.json");
-
-/** @returns {string} */
-function loadOperator() {
-  try {
-    const raw = fs.readFileSync(configPath, "utf8");
-    const config = JSON.parse(raw);
-    return config.operator || process.env["USER"] || "unknown";
-  } catch {
-    return process.env["USER"] ?? "unknown";
-  }
-}
-
-/**
- * Initialize a new observed run — writes RUN_CREATED + INTENT_COMPILED events.
- * Returns the new runId.
- *
- * @param {string} runId
- * @returns {Promise<void>}
- */
-async function initRun(runId) {
-  const { LedgerWriter } = await import("@agentledger/core");
-  const writer = new LedgerWriter(ledgerPath);
-  const operator = loadOperator();
-
-  // Ensure .agentledger dir exists
-  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-
-  await writer.appendEvent({
-    event_id: `evt_${Date.now()}_run_created`,
-    run_id: runId,
-    timestamp: new Date().toISOString(),
-    actor: "plugin:post-tool-use",
-    event_type: "RUN_CREATED",
-    payload: {
-      goal: "Observed Claude Code session",
-      operator,
-      run_mode: "observed",
-    },
-  });
-
-  await writer.appendEvent({
-    event_id: `evt_${Date.now()}_intent`,
-    run_id: runId,
-    timestamp: new Date().toISOString(),
-    actor: "plugin:post-tool-use",
-    event_type: "INTENT_COMPILED",
-    payload: {
-      goal: "Observed Claude Code session",
-      taskCount: 0,
-      tasks: [],
-    },
-  });
-}
 
 async function main() {
   // Read hook input from stdin
@@ -108,9 +55,7 @@ async function main() {
 
   // Lazy run init: first Edit or Write triggers run creation
   if (!state.runId && (toolName === "Edit" || toolName === "Write")) {
-    const runId = randomUUID();
-    await initRun(runId);
-    state = { ...state, runId, dirty: true };
+    state = await ensureRun(state, "plugin:post-tool-use");
   }
 
   // Track file operations in session state

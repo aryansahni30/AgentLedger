@@ -14,22 +14,31 @@ import { minimatch } from "minimatch";
  *   testsPassed: boolean,
  *   testExitCode: number,
  *   testOutput: string,
+ *   testTimedOut: boolean,
  *   boundaryClean: boolean,
  *   violations: Array<{ file: string, pattern: string }>
  * }} VerificationResult
  */
 
+// Conventional exit code for a command killed by timeout (matches coreutils `timeout`).
+const TIMEOUT_EXIT_CODE = 124;
+
 /**
  * Run the test command and return exit code + output.
+ *
+ * A timeout is reported distinctly (`timedOut: true`) rather than folded into a
+ * generic exit 1: execSync kills an overrunning command with SIGTERM and leaves
+ * `err.status` null, which would otherwise read as an ordinary test failure. The
+ * caller needs the distinction — a timed-out suite is inconclusive, not failed.
  *
  * @param {string} testCommand
  * @param {string} projectDir
  * @param {number} [timeout=120000] — ms timeout for test execution
- * @returns {{ exitCode: number, output: string }}
+ * @returns {{ exitCode: number, output: string, timedOut: boolean }}
  */
 export function runTestCommand(testCommand, projectDir, timeout = 120_000) {
   if (!testCommand) {
-    return { exitCode: 0, output: "(skipped — no testCommand configured)" };
+    return { exitCode: 0, output: "(skipped — no testCommand configured)", timedOut: false };
   }
   try {
     const stdout = execSync(testCommand, {
@@ -38,11 +47,13 @@ export function runTestCommand(testCommand, projectDir, timeout = 120_000) {
       timeout,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    return { exitCode: 0, output: stdout };
+    return { exitCode: 0, output: stdout, timedOut: false };
   } catch (err) {
+    const timedOut = err.killed === true || err.signal === "SIGTERM" || err.code === "ETIMEDOUT";
     return {
-      exitCode: err.status ?? 1,
+      exitCode: err.status ?? (timedOut ? TIMEOUT_EXIT_CODE : 1),
       output: (err.stdout ?? "") + (err.stderr ?? ""),
+      timedOut,
     };
   }
 }
@@ -108,6 +119,7 @@ export function verify({ testCommand, blockedFiles, projectDir, testTimeout }) {
     testsPassed: testResult.exitCode === 0,
     testExitCode: testResult.exitCode,
     testOutput: testResult.output,
+    testTimedOut: testResult.timedOut,
     boundaryClean: violations.length === 0,
     violations,
   };

@@ -361,3 +361,194 @@ None — all major decisions locked in `decisions.md`.
 - The public demo GIF is deliberately deferred to Phase 7. Phase 6 fixtures are test coverage, not the public story.
 - OpenAI adapter can be added alongside Anthropic in Phase 7 — Anthropic is the priority since Claude Code is the demo environment.
 - `agentledger run` is the integration test for Phases 1-6 combined. Don't wait until Phase 7 to test the full pipeline with mocked components.
+
+## 2026-07-17 — Lie Detector fixed: claim events never reached the ledger
+
+**Root cause.** The plugin's Stop hook emitted `CLAIM_VERIFIED` / `CLAIM_FALSIFIED` /
+`CLAIM_UNVERIFIABLE`, none of which existed in `LedgerEventTypeSchema`. Every
+`LedgerWriter.appendEvent` threw a ZodError and `appendClaimEvent`'s bare `catch {}`
+discarded it. Detection, verification and `session.json` counters all worked — a real
+session showed `claimsDetected: 1, claimsVerifiedTrue: 1` — while the ledger recorded
+zero claim events. Unit tests mocked the writer, so nothing exercised the real parse.
+
+**Fixed.**
+- `LedgerEventTypeSchema` gained `CLAIM_DETECTED`, `CLAIM_VERIFIED`, `CLAIM_FALSIFIED`,
+  `CLAIM_UNVERIFIABLE`. The plugin and visualizer already agreed on these names; core was
+  the stale layer.
+- `appendClaimEvent` reports failures on stderr and returns a written/not-written boolean.
+- `CLAIM_DETECTED` is now emitted per claim before verification, so a crash or timeout
+  still leaves the claim on record.
+- Debounce moved from a module-level `Map` into session state. Each hook invocation is a
+  fresh process, so the Map was always empty and debouncing never happened.
+- Claim detector: patterns widened to real phrasing ("tests are passing", "48/48 green",
+  "48 passed (48)", "typecheck clean"). Hedge handling was inverted — it *stripped*
+  "should"/"will"/"if", turning "tests should pass" into a detected claim. Now hedged and
+  quoted sentences are discarded before matching.
+- `stats.json` is initialized at SessionStart (existing stats never clobbered). It was
+  written only by SessionEnd, so any session left open or killed produced no stats at all.
+
+**Verified end-to-end** against `/tmp/trust-test-app` with a real bug (302→301, 3 real
+failures) and a real claim of "48 tests pass, typecheck clean": ledger recorded
+2× `CLAIM_DETECTED` + 2× `CLAIM_FALSIFIED` with `test_exit_code: 1`, chain intact across
+85 events. Honest-claim path emits `CLAIM_VERIFIED`. 600/600 tests pass (+29: 11 core
+contract, 11 new `stop.test.js`, 7 detector).
+
+**Next.** `stop.test.js` now covers the hook end-to-end; the same treatment is worth giving
+`pre-tool-use` (a `.env` write is blocked for the Write tool but a `cat > .env` heredoc in
+Bash walks past it — the PreToolUse matcher is `Edit|Write` only).
+
+---
+
+## 2026-07-17 — The gate that skipped every live session
+
+The lie detector worked in every test and did nothing in every real session. Five live
+Stop invocations, all returning in 63–80ms — too fast to have run a test command.
+
+**Root cause.** `stop.js` gated verification on `(state.edits ?? 0) + (state.writes ?? 0) > 0`
+("skip if no file changes — informational statement, not a work claim"). A live trace
+(`AGENTLEDGER_DEBUG=1`) caught it exactly:
+
+```
+state: runId=null edits=0 writes=0 bash=1 recentVerifications={}
+EXIT guard=no-file-changes (edits=0 writes=0)
+```
+
+"Run npm test and report the result" edits nothing. `bash=1, edits=0` → guard fires →
+exit before verifying. The single most common shape of a false claim was the one shape
+never checked.
+
+**Why the tests never caught it.** `stop.test.js`'s fixture seeds `edits: 5, writes: 1,
+runId: "run_test_123"` — it reproduced neither live condition, and its comment even said
+so: *"Seed session state as if edits already happened — the hook ignores claims otherwise."*
+The suite asserted the bug was intentional (`it("records nothing when the session changed
+no files")`). Manual invocations passed for the same reason: they ran against a
+`session.json` left over from an earlier editing session.
+
+**Second bug, same scenario.** `runId` is lazy-inited only on first Edit/Write
+(`post-tool-use.js`). An edit-free session has `runId: null`, so even past the gate every
+`appendClaimEvent` would have bailed with "no run_id in session state". Fixing the gate
+alone would have produced a hook that detects claims and still records nothing.
+
+**Fixed.**
+- Gate is now any tool call (`reads + edits + writes + bashCalls > 0`); only a session that
+  did literally nothing is skipped. See ADR-017.
+- New `scripts/run-init.js` exports `ensureRun(state, actor)`. `initRun` + `loadOperator`
+  were copy-pasted in `pre-tool-use.js` and `post-tool-use.js` and absent from `stop.js`,
+  which is why claims had no run to attach to. Three call sites, one implementation.
+- `extractAssistantMessage` prefers the payload's `last_assistant_message`. The old
+  fallbacks read `stop_response` and `content` — neither field exists in any payload Claude
+  Code sends. Captured live payload:
+  `session_id, transcript_path, cwd, prompt_id, permission_mode, effort, hook_event_name,
+  stop_hook_active, last_assistant_message, background_tasks, session_crons`.
+- `AGENTLEDGER_DEBUG=1` traces every guard + dumps the raw payload. Off by default. This
+  bug class — silent early-exit — is invisible without it.
+
+**Verified from the LIVE hook**, not a manual invocation: a real `claude -p` session in
+`/private/tmp/trust-test-app` that ran the suite and reported "All 48 tests pass across 6
+files in 389ms — suite green" produced `RUN_CREATED` + `INTENT_COMPILED` +
+`CLAIM_DETECTED` + `CLAIM_VERIFIED` (`test_exit_code: 0`), all `actor: plugin:stop`,
+`run=06479ae4`, with SessionEnd chaining `VERIFICATION_PASSED` + `RUN_COMPLETED` onto the
+same run. Chain valid across 18 events; `stats.json` rolled up to `trustScore: 1`.
+610/610 tests pass (+22).
+
+**Next.** The gate is fixed but the detector still only fires on the *last* assistant
+message of a turn — a claim made mid-turn, before more tool calls, is never seen. Also
+still open from before: the PreToolUse matcher is `Edit|Write` only, so a `cat > .env`
+heredoc in Bash walks past the block.
+
+---
+
+## 2026-07-17 — Cross-project dashboard: project filter + multi-ledger aggregation
+
+The dashboard was per-repo: the server read one `.agentledger/ledger.jsonl` (its
+spawner's `CLAUDE_PROJECT_DIR`) but polled a fixed port 4242, so whichever project
+started it first owned the dashboard and every later project's sessions went
+nowhere. Made it cross-project.
+
+**Data layer (core).** New `projects/registry.ts` — `~/.agentledger/projects.json`,
+appended by SessionStart. Path key is the canonical realpath (dedupes /tmp vs
+/private/tmp — proven: they realpath to the same dir); project identity is the
+basename, matching claude-mem. Writes take a `proper-lockfile` lock: 8 concurrent
+registrations collapse to 1 without it (test proves it — remove the lock and it
+fails `['proj-7']` ≠ 8 projects). Reads never throw (corrupt file → salvage or []).
+`ProjectEntry` / `ProjectRegistry` Zod schemas added to core + schemas.md.
+
+**Server.** New `LedgerRegistry` service runs one *tagging* FileWatcher per
+registered project (event → `{...event, project}`) and watches the registry file
+itself, so a project registering mid-run appears without a server restart (a
+missing ledger.jsonl is touched into place so fs.watch has a target). Routes now
+read the shared tagged store instead of one LedgerReader: `/api/runs` +
+`/api/leaderboard` span all projects, each run tagged with its project; new
+`/api/projects` serves selector options + per-project `chainValid`. Chains are
+per-ledger and cannot be merged, so the cross-project badge is a worst-case
+roll-up. Server now binds `127.0.0.1` (it aggregates every repo's ledger — the old
+`0.0.0.0` default exposed all of them to the LAN).
+
+**UI.** `ProjectProvider` (localStorage selection, SSE-refetch, chain roll-up) +
+`ProjectSelector` in the top nav next to "Trust Layer". THE SPLIT: aggregate
+(trust score, trend, lies/blocks/claims) is computed from ALL sessions and never
+filtered; only the session list + detail respond to the selector. The band is
+labeled "Trust across all projects" so the intentional non-response doesn't read
+as a bug.
+
+**Verified end-to-end, live.** Installed SessionStart hook writes projects.json
+(canonical path + basename). Two seeded projects through the real HTTP server:
+`/api/projects` lists both with correct session counts + `chainValid: true`,
+`/api/events/history` returns events tagged by both, `/api/runs` tags each run
+with its project. A tampered ledger in one project reports `chainValid: false`
+there and true elsewhere (isolation holds). 626/626 tests pass (+15: 11 registry,
+4 multi-ledger integration). Typecheck clean across all 5 packages.
+
+**Gotcha for next time:** do NOT run `npx tsc -b` at the repo root — a build config
+emits visualizer `.tsx` → `.js` with `jsx: preserve` INTO src/, and Vite then
+resolves `./Foo.js` imports to the stale JSX-containing sibling, breaking every
+visualizer test with "invalid JS syntax". Use `pnpm -r typecheck` (`tsc --noEmit`).
+And `git clean` in visualizer/src removes untracked *source* too — the new .tsx
+files — not just artifacts; scope it or delete files explicitly.
+
+**Still open (pre-existing, not introduced here):** the visualizer `build` script's
+`tsc -b` emits into src/ (should target dist/); untracked `.js`/`.d.ts` build
+pollution sits in cli/src and visualizer/src.
+
+---
+
+## Plugin 0.2.1 — SessionEnd summary box now actually prints (2026-07-20)
+
+The README's "Session End" box was documented but effectively never appeared. Root
+cause was a three-part gate in `session-end.js`: (1) the guard required a `runId`,
+minted only on Edit/Write, so read-only/review sessions were skipped; (2) the box
+printed *after* `verify()`, whose default 120s test timeout equaled the hook timeout,
+so a slow `npm test` was SIGKILLed before `console.log`; (3) SessionEnd only fires on
+`/clear`, `/exit`, logout, resume, `-p` exit — a hard terminal close can skip it
+(platform limitation, undocumented "other" matcher).
+
+**Fix:** guard on `state.dirty` only; lazily `ensureRun()` when no run exists; run the
+test suite only when `edits+writes > 0`; bound the SessionEnd test timeout to 90s. Added
+timeout detection to `verifier.runTestCommand` (`timedOut` flag, exit 124) so a killed
+suite reads as "timeout", not a false "exit 1"/failed. See ADR-022.
+
+Tests: 93/93 plugin tests pass (+5: 4 verifier `runTestCommand`, and the former
+"runId null → 0 events" test rewritten to assert the read-only session now mints a run
+and prints the box). Rebuilt `dist/*.cjs`; synced into the installed npx copy so the fix
+is live in the next real session. Bumped 0.2.0 → 0.2.1. **npm republish still pending
+user go-ahead.**
+
+### Session End box now actually renders (ADR-023) — 2026-07-20
+
+Problem: ADR-022 made SessionEnd *compute* the box for every session, but Claude Code
+**swallows SessionEnd hook stdout** (terminal is tearing down), so the box was never on
+screen. Only SessionStart stdout is rendered (via the `systemMessage` envelope).
+
+Fix: new `scripts/end-summary.js`. SessionEnd now persists its rendered box to
+`.agentledger/last-session-summary.txt`. SessionStart reads the payload `source` from
+stdin and:
+- `clear` / `startup` / `resume` → replays the persisted End box into `systemMessage`,
+  then deletes the file (renders exactly once). `/clear` fires SessionEnd → SessionStart
+  back-to-back, so the box appears the instant you clear; after a hard quit it shows at
+  the next launch.
+- `compact` → fires no SessionEnd, so renders a live **checkpoint** box from the current
+  un-cleared session state (claims / activity / trust) — our banner beside claude-mem's.
+
+Tests: 100/100 plugin tests pass (+7 in `__tests__/end-summary.test.js`). Rebuilt
+`dist/*.cjs`. Verified all three flows end-to-end in an isolated scratch project. Version
+still 0.2.1 — **bump + npm republish still pending user go-ahead.**

@@ -23,6 +23,12 @@ const LedgerEventTypeSchema = z.enum([
   "VERIFICATION_PASSED",
   "VERIFICATION_FAILED",
   "BOUNDARY_VIOLATION",
+  // Lie Detector (plugin Stop hook). CLAIM_DETECTED records what was claimed;
+  // the following event records what checking it found.
+  "CLAIM_DETECTED",
+  "CLAIM_VERIFIED",
+  "CLAIM_FALSIFIED",
+  "CLAIM_UNVERIFIABLE",
   "HUMAN_APPROVAL_REQUESTED",
   "TASK_COMPLETED",
   "TASK_FAILED",
@@ -285,3 +291,35 @@ const AgentLedgerConfigSchema = z.object({
 
 type AgentLedgerConfig = z.infer<typeof AgentLedgerConfigSchema>;
 ```
+
+---
+
+## ProjectEntry / ProjectRegistry (~/.agentledger/projects.json)
+
+Cross-project registry. SessionStart appends the current repo; the server reads
+the file to discover which ledgers to watch. `path` is the canonical realpath and
+is unique per entry (how the server locates the ledger). `name` is the basename
+and is the project *identifier* used by the API and UI, matching claude-mem — two
+repos with the same basename share an identifier and their sessions interleave,
+but both paths are kept so neither ledger is lost.
+
+```typescript
+const ProjectEntrySchema = z.object({
+  path: z.string().min(1),     // canonical realpath — unique, locates the ledger
+  name: z.string().min(1),     // basename — the API/UI project identifier
+  firstSeen: z.string(),       // ISO timestamp
+  lastSeen: z.string(),        // ISO timestamp, advanced on every SessionStart
+});
+
+const ProjectRegistrySchema = z.object({
+  version: z.literal(1),
+  projects: z.array(ProjectEntrySchema),
+});
+
+type ProjectEntry = z.infer<typeof ProjectEntrySchema>;
+type ProjectRegistry = z.infer<typeof ProjectRegistrySchema>;
+```
+
+Writes are serialized with `proper-lockfile` (concurrent SessionStarts race).
+Reads never throw: a corrupt or partially-written file yields `[]` or the salvageable rows.
+

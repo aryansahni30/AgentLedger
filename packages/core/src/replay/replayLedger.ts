@@ -80,7 +80,7 @@ function assertTaskTransition(
  * NOTE: "replay" means *reconstructing state*, not re-executing agents.
  * LLM agents are not deterministic; the *protocol* is.
  */
-export function replayLedger(events: LedgerEvent[], runId: string): RunState {
+export function replayLedger(events: readonly LedgerEvent[], runId: string): RunState {
   // Mutable working state — only mutated inside this function
   let status: RunStatus = "created";
   let goal = "";

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { detectBoundaryViolations } from "../scripts/verifier.js";
+import { tmpdir } from "os";
+import { detectBoundaryViolations, runTestCommand } from "../scripts/verifier.js";
 
 describe("verifier.js — detectBoundaryViolations", () => {
   it("detects .env file as violation", () => {
@@ -42,5 +43,33 @@ describe("verifier.js — detectBoundaryViolations", () => {
       ["**/*.pem", "**/*.key"]
     );
     expect(violations).toHaveLength(2);
+  });
+});
+
+describe("verifier.js — runTestCommand", () => {
+  it("reports exit 0 for a passing command", () => {
+    const result = runTestCommand("exit 0", tmpdir());
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("reports a non-zero exit for a failing command", () => {
+    const result = runTestCommand("exit 3", tmpdir());
+    expect(result.exitCode).toBe(3);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("flags a command killed by timeout as timedOut, not a plain failure", () => {
+    // A 5s sleep against a 200ms budget is killed by SIGTERM; execSync leaves
+    // err.status null, which must surface as timedOut rather than a generic exit 1.
+    const result = runTestCommand("sleep 5", tmpdir(), 200);
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).toBe(124);
+  });
+
+  it("skips cleanly when no test command is configured", () => {
+    const result = runTestCommand("", tmpdir());
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
   });
 });
