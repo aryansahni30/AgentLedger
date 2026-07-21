@@ -111,9 +111,6 @@ The plugin is the primary surface. Install it via the marketplace (above) and it
 
 **Dashboard** — the SessionStart hook serves a local dashboard at `http://localhost:4242`: trust score over time, per-session claim accuracy, the event stream, and a cross-project view.
 
-![AgentLedger dashboard](docs/dashboard.png)
-<!-- placeholder — drop a real screenshot at docs/dashboard.png -->
-
 ## Use from the CLI
 
 For power users, AgentLedger also ships an orchestrator that coordinates agents through the same ledger and verification gate — independent of Claude Code.
