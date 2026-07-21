@@ -21,3 +21,6 @@ vitest.workspace.js
 vitest.workspace.d.ts
 # incremental build info (regenerated, never source)
 *.tsbuildinfo
+
+# internal working notes
+.brain/
