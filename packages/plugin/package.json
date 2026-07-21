@@ -4,10 +4,10 @@
   "type": "module",
   "description": "The trust layer for AI coding agents. Catches false completion claims in real-time, blocks protected file writes, and tracks claim accuracy across sessions. Claude Code plugin.",
   "license": "MIT",
-  "homepage": "https://github.com/aryansahni30/AgentLeader/tree/main/packages/plugin",
+  "homepage": "https://github.com/aryansahni30/AgentLedger/tree/main/packages/plugin",
   "repository": {
     "type": "git",
-    "url": "https://github.com/aryansahni30/AgentLeader",
+    "url": "https://github.com/aryansahni30/AgentLedger",
     "directory": "packages/plugin"
   },
   "keywords": [

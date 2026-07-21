@@ -6,7 +6,7 @@ Please do **not** open a public issue for security vulnerabilities.
 
 Report privately through GitHub Security Advisories:
 
-1. Go to the [Security tab](https://github.com/aryansahni30/AgentLeader/security/advisories) of the repository.
+1. Go to the [Security tab](https://github.com/aryansahni30/AgentLedger/security/advisories) of the repository.
 2. Click **Report a vulnerability**.
 3. Describe the issue, affected versions, and steps to reproduce.
 
