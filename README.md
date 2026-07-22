@@ -6,12 +6,13 @@
 
 Claude says done. AgentLedger checks — against real exit codes, not self-reports.
 
+[![website](https://img.shields.io/badge/website-agentledger-7c3aed?style=flat-square&logo=githubpages&logoColor=white)](https://aryansahni30.github.io/AgentLedger/)
 [![npm version](https://img.shields.io/npm/v/agentledger-plugin.svg?style=flat-square&logo=npm&label=npm)](https://www.npmjs.com/package/agentledger-plugin)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![node](https://img.shields.io/node/v/agentledger-plugin.svg?style=flat-square&logo=nodedotjs&logoColor=white)](package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-[Quickstart](#quickstart) · [How it works](#how-it-works) · [Claude Code plugin](#use-in-claude-code) · [CLI](#use-from-the-cli) · [Configuration](#configuration)
+[Website](https://aryansahni30.github.io/AgentLedger/) · [Quickstart](#quickstart) · [How it works](#how-it-works) · [Claude Code plugin](#use-in-claude-code) · [CLI](#use-from-the-cli) · [Configuration](#configuration)
 
 </div>
 
