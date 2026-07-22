@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentLedger — The trust layer for AI coding agents</title>
+    <meta
+      name="description"
+      content="Claude says done. AgentLedger checks — against real exit codes, not self-reports. Blocks writes to protected files, verifies completion claims, and keeps a hash-chained audit ledger. Runs as a Claude Code plugin, locally, with no telemetry."
+    />
+    <meta property="og:title" content="AgentLedger — The trust layer for AI coding agents" />
+    <meta
+      property="og:description"
+      content="Claude says done. AgentLedger checks — against real exit codes, not self-reports."
+    />
+    <meta property="og:type" content="website" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><text y='18' font-size='18'>📒</text></svg>"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* ── Design tokens: mirrored from the AgentLedger dashboard ── */
+      :root {
+        --bg-0: #09090b;
+        --bg-1: #111113;
+        --bg-2: #18181b;
+        --bg-3: #27272a;
+        --border: #27272a;
+        --border-subtle: #1e1e21;
+        --text-0: #fafafa;
+        --text-1: #a1a1aa;
+        --text-2: #52525b;
+        --accent: #7c3aed;
+        --accent-dim: rgba(124, 58, 237, 0.12);
+        --green: #22c55e;
+        --green-dim: rgba(34, 197, 94, 0.12);
+        --yellow: #eab308;
+        --yellow-dim: rgba(234, 179, 8, 0.12);
+        --red: #ef4444;
+        --red-dim: rgba(239, 68, 68, 0.12);
+        --radius: 8px;
+        --radius-sm: 6px;
+        --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+        --maxw: 1120px;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        background: var(--bg-0);
+        color: var(--text-0);
+        font-family: var(--font-sans);
+        font-size: 14px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      /* ── Top nav ─────────────────────────────────────────────── */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 32px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(17, 17, 19, 0.72);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+
+      .nav-logo {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      .nav-mark {
+        font-size: 16px;
+        line-height: 1;
+      }
+
+      .nav-pill {
+        font-size: 12px;
+        color: var(--text-2);
+        font-weight: 500;
+        padding: 2px 8px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+      }
+
+      .nav-spacer {
+        flex: 1;
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .nav-link {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-1);
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+        transition: color 0.12s, background 0.12s;
+      }
+
+      .nav-link:hover {
+        color: var(--text-0);
+        background: var(--bg-2);
+      }
+
+      /* ── Layout ──────────────────────────────────────────────── */
+      main {
+        max-width: var(--maxw);
+        width: 100%;
+        margin: 0 auto;
+        padding: 0 32px;
+      }
+
+      section {
+        padding: 56px 0;
+      }
+
+      .section-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-2);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 20px;
+      }
+
+      /* ── Hero ────────────────────────────────────────────────── */
+      .hero {
+        position: relative;
+        text-align: center;
+        padding: 88px 0 40px;
+        overflow: hidden;
+      }
+
+      .hero .hero-glow {
+        position: absolute;
+        top: -120px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 720px;
+        height: 480px;
+        max-width: 120vw;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(124, 58, 237, 0.22) 0%,
+          rgba(124, 58, 237, 0.06) 42%,
+          transparent 70%
+        );
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      .hero > * {
+        position: relative;
+        z-index: 1;
+      }
+
+      .hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-1);
+        background: var(--bg-1);
+        border: 1px solid var(--border);
+        padding: 5px 12px 5px 10px;
+        border-radius: 20px;
+        margin-bottom: 28px;
+      }
+
+      .live-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+      }
+
+      .hero h1 {
+        font-size: clamp(44px, 8vw, 76px);
+        font-weight: 700;
+        letter-spacing: -0.035em;
+        line-height: 1;
+        background: linear-gradient(180deg, #ffffff 0%, #b7b7be 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .hero-tagline {
+        font-size: clamp(18px, 3vw, 24px);
+        font-weight: 600;
+        color: var(--text-0);
+        margin-top: 22px;
+        letter-spacing: -0.01em;
+      }
+
+      .hero-sub {
+        font-size: clamp(15px, 2vw, 17px);
+        color: var(--text-1);
+        max-width: 620px;
+        margin: 16px auto 0;
+        line-height: 1.6;
+      }
+
+      .hero-sub .accent {
+        color: var(--text-0);
+        font-weight: 500;
+      }
+
+      .hero-cta {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        margin-top: 32px;
+        flex-wrap: wrap;
+      }
+
+      /* ── Buttons ─────────────────────────────────────────────── */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        font-family: inherit;
+        padding: 10px 18px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        cursor: pointer;
+        transition: background 0.12s, border-color 0.12s, transform 0.06s;
+      }
+
+      .btn:active {
+        transform: translateY(1px);
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .btn-primary:hover {
+        background: #6d28d9;
+        border-color: #6d28d9;
+      }
+
+      .btn-ghost {
+        background: var(--bg-1);
+        color: var(--text-0);
+      }
+
+      .btn-ghost:hover {
+        background: var(--bg-2);
+        border-color: var(--bg-3);
+      }
+
+      .btn svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      /* ── Demo ────────────────────────────────────────────────── */
+      .demo {
+        padding-top: 12px;
+      }
+
+      .demo-frame {
+        position: relative;
+        background: var(--bg-1);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px;
+        box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.8),
+          0 0 0 1px rgba(124, 58, 237, 0.06);
+      }
+
+      .demo-chrome {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px 8px 12px;
+      }
+
+      .demo-dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--bg-3);
+      }
+
+      .demo-chrome-label {
+        margin-left: 10px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--text-2);
+      }
+
+      .demo-frame img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: var(--radius);
+        border: 1px solid var(--border-subtle);
+      }
+
+      .demo-caption {
+        text-align: center;
+        font-size: 13px;
+        color: var(--text-2);
+        margin-top: 16px;
+      }
+
+      /* ── Install ─────────────────────────────────────────────── */
+      .install {
+        max-width: 720px;
+        margin: 0 auto;
+        text-align: center;
+      }
+
+      .install h2 {
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+
+      .install p {
+        color: var(--text-1);
+        margin-top: 8px;
+        font-size: 15px;
+      }
+
+      .code-block {
+        position: relative;
+        text-align: left;
+        background: var(--bg-1);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        margin-top: 24px;
+        overflow: hidden;
+      }
+
+      .code-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-1);
+      }
+
+      .code-head-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-2);
+      }
+
+      .copy-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--text-1);
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 4px 10px;
+        cursor: pointer;
+        transition: color 0.12s, border-color 0.12s;
+      }
+
+      .copy-btn:hover {
+        color: var(--text-0);
+        border-color: var(--bg-3);
+      }
+
+      .copy-btn.copied {
+        color: var(--green);
+        border-color: var(--green);
+      }
+
+      .copy-btn svg {
+        width: 13px;
+        height: 13px;
+      }
+
+      .code-body {
+        padding: 16px 18px;
+        font-family: var(--font-mono);
+        font-size: 13.5px;
+        line-height: 1.9;
+        overflow-x: auto;
+      }
+
+      .code-body .line {
+        white-space: pre;
+      }
+
+      .code-body .prompt {
+        color: var(--accent);
+        user-select: none;
+      }
+
+      .install-note {
+        font-size: 13px;
+        color: var(--text-2);
+        margin-top: 16px;
+      }
+
+      .install-note code {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text-1);
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+
+      /* ── Feature cards ───────────────────────────────────────── */
+      .features {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+
+      .card {
+        background: var(--bg-1);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 24px;
+        transition: border-color 0.15s, transform 0.15s;
+      }
+
+      .card:hover {
+        border-color: var(--bg-3);
+        transform: translateY(-2px);
+      }
+
+      .card-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        border-radius: var(--radius-sm);
+        background: var(--accent-dim);
+        color: var(--accent);
+        margin-bottom: 16px;
+      }
+
+      .card-icon svg {
+        width: 20px;
+        height: 20px;
+      }
+
+      .card h3 {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      .card p {
+        font-size: 13.5px;
+        color: var(--text-1);
+        margin-top: 8px;
+        line-height: 1.6;
+      }
+
+      /* ── How it works ────────────────────────────────────────── */
+      .flow {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        background: var(--bg-1);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+
+      .flow-row {
+        display: grid;
+        grid-template-columns: 148px 96px 1fr;
+        gap: 16px;
+        align-items: center;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border-subtle);
+      }
+
+      .flow-row:last-child {
+        border-bottom: none;
+      }
+
+      .flow-hook {
+        font-family: var(--font-mono);
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-0);
+      }
+
+      .flow-tag {
+        justify-self: start;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 2px 9px;
+        border-radius: 20px;
+        white-space: nowrap;
+      }
+
+      .flow-tag.setup {
+        background: var(--bg-3);
+        color: var(--text-1);
+      }
+      .flow-tag.prevent {
+        background: var(--accent-dim);
+        color: var(--accent);
+      }
+      .flow-tag.record {
+        background: var(--bg-3);
+        color: var(--text-1);
+      }
+      .flow-tag.verify {
+        background: var(--yellow-dim);
+        color: var(--yellow);
+      }
+      .flow-tag.detect {
+        background: var(--green-dim);
+        color: var(--green);
+      }
+
+      .flow-desc {
+        font-size: 13.5px;
+        color: var(--text-1);
+        line-height: 1.55;
+      }
+
+      .flow-desc b {
+        color: var(--text-0);
+        font-weight: 500;
+      }
+
+      .flow-foot {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 16px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text-2);
+      }
+
+      .flow-foot .chain-badge {
+        color: var(--green);
+        background: var(--green-dim);
+        padding: 3px 9px;
+        border-radius: 20px;
+        font-weight: 500;
+      }
+
+      /* ── Footer ──────────────────────────────────────────────── */
+      footer {
+        border-top: 1px solid var(--border);
+        margin-top: 40px;
+      }
+
+      .footer-inner {
+        max-width: var(--maxw);
+        margin: 0 auto;
+        padding: 40px 32px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+
+      .footer-brand {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .footer-brand-name {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .footer-brand-sub {
+        font-size: 12px;
+        color: var(--text-2);
+      }
+
+      .footer-links {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
+        flex-wrap: wrap;
+      }
+
+      .footer-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-1);
+        background: var(--bg-1);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 8px 14px;
+        transition: color 0.12s, border-color 0.12s, background 0.12s;
+      }
+
+      .footer-link:hover {
+        color: var(--text-0);
+        border-color: var(--bg-3);
+        background: var(--bg-2);
+      }
+
+      .footer-link svg {
+        width: 15px;
+        height: 15px;
+      }
+
+      /* ── Responsive ──────────────────────────────────────────── */
+      @media (max-width: 820px) {
+        .features {
+          grid-template-columns: 1fr;
+        }
+        .flow-row {
+          grid-template-columns: 1fr;
+          gap: 8px;
+          align-items: start;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .nav,
+        main {
+          padding-left: 18px;
+          padding-right: 18px;
+        }
+        .nav-pill {
+          display: none;
+        }
+        section {
+          padding: 44px 0;
+        }
+        .footer-links {
+          margin-left: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ── Nav ──────────────────────────────────────────────── -->
+    <nav class="nav">
+      <a class="nav-logo" href="#top"><span class="nav-mark">📒</span>AgentLedger</a>
+      <span class="nav-pill">Trust Layer</span>
+      <span class="nav-spacer"></span>
+      <div class="nav-links">
+        <a class="nav-link" href="#install">Install</a>
+        <a class="nav-link" href="#how">How it works</a>
+        <a class="nav-link" href="https://github.com/aryansahni30/AgentLedger">GitHub</a>
+      </div>
+    </nav>
+
+    <main>
+      <!-- ── Hero ───────────────────────────────────────────── -->
+      <section class="hero" id="top">
+        <div class="hero-glow"></div>
+        <span class="hero-badge">
+          <span class="live-dot"></span>
+          Runs locally · no telemetry · MIT
+        </span>
+        <h1>AgentLedger</h1>
+        <p class="hero-tagline">The trust layer for AI coding agents</p>
+        <p class="hero-sub">
+          <span class="accent">Claude says done. AgentLedger checks</span> — against
+          real exit codes, not self-reports.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#install">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+            Install the plugin
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/aryansahni30/AgentLedger">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.73 1.27 3.4.97.1-.75.4-1.27.73-1.56-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg>
+            View source
+          </a>
+        </div>
+      </section>
+
+      <!-- ── Demo ───────────────────────────────────────────── -->
+      <section class="demo" aria-label="Demo">
+        <div class="demo-frame">
+          <div class="demo-chrome">
+            <span class="demo-dot"></span>
+            <span class="demo-dot"></span>
+            <span class="demo-dot"></span>
+            <span class="demo-chrome-label">agentledger — catching a false completion claim</span>
+          </div>
+          <img src="demo.gif" width="1200" height="800" alt="AgentLedger blocking a protected-file write and falsifying a 'tests pass' claim in Claude Code" />
+        </div>
+        <p class="demo-caption">A protected-file write blocked before disk, and a “tests pass” claim caught against a non-zero exit code.</p>
+      </section>
+
+      <!-- ── Install ────────────────────────────────────────── -->
+      <section id="install" class="install">
+        <h2>One install. Every session observed.</h2>
+        <p>Run these two lines inside Claude Code.</p>
+        <div class="code-block">
+          <div class="code-head">
+            <span class="code-head-label">Claude Code</span>
+            <button class="copy-btn" id="copyBtn" type="button" aria-label="Copy install commands">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span id="copyLabel">Copy</span>
+            </button>
+          </div>
+          <div class="code-body">
+<span class="line"><span class="prompt">/</span><span id="cmd1">plugin marketplace add aryansahni30/AgentLedger</span></span>
+<span class="line"><span class="prompt">/</span><span id="cmd2">plugin install agentledger@agentledger</span></span>
+          </div>
+        </div>
+        <p class="install-note">
+          Wires all five hooks automatically — no <code>settings.json</code> editing. The ledger is created on first run and every session is scored from then on.
+        </p>
+      </section>
+
+      <!-- ── Features ───────────────────────────────────────── -->
+      <section>
+        <div class="section-label">What it does</div>
+        <div class="features">
+          <div class="card">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
+            </span>
+            <h3>Claim verification</h3>
+            <p>Completion claims — “tests pass,” “fixed the bug” — are checked against the real test command’s exit code. The agent’s word is logged, never trusted.</p>
+          </div>
+          <div class="card">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
+            </span>
+            <h3>Boundary enforcement</h3>
+            <p>Writes to protected paths — <span style="font-family:var(--font-mono);font-size:12px">.env</span>, keys, secrets — are blocked before they ever touch disk, and the denial is recorded.</p>
+          </div>
+          <div class="card">
+            <span class="card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </span>
+            <h3>Hash-chained ledger</h3>
+            <p>Every action lands in an append-only, SHA-256 hash-chained log — reads, edits, blocked writes, verified and falsified claims. The chain breaks if anyone tampers.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── How it works ───────────────────────────────────── -->
+      <section id="how">
+        <div class="section-label">How it works — five hooks, every session</div>
+        <div class="flow">
+          <div class="flow-row">
+            <span class="flow-hook">SessionStart</span>
+            <span class="flow-tag setup">Setup</span>
+            <span class="flow-desc">Creates <b>.agentledger/</b>, validates the chain, prints the trust banner, starts the local dashboard.</span>
+          </div>
+          <div class="flow-row">
+            <span class="flow-hook">PreToolUse</span>
+            <span class="flow-tag prevent">Prevent</span>
+            <span class="flow-desc"><b>Blocks</b> Edit/Write to protected paths before disk (exit code 2); warns on sensitive ones.</span>
+          </div>
+          <div class="flow-row">
+            <span class="flow-hook">PostToolUse</span>
+            <span class="flow-tag record">Record</span>
+            <span class="flow-desc">Records each Edit/Write/Bash/Read to the ledger and tracks the read:edit ratio.</span>
+          </div>
+          <div class="flow-row">
+            <span class="flow-hook">Stop</span>
+            <span class="flow-tag verify">Verify</span>
+            <span class="flow-desc">Scans the turn for a completion claim; on a hit, runs the <b>real test command</b> → verified or falsified.</span>
+          </div>
+          <div class="flow-row">
+            <span class="flow-hook">SessionEnd</span>
+            <span class="flow-tag detect">Detect</span>
+            <span class="flow-desc"><b>git diff</b> boundary check + test run; writes the session summary and updates the trust score.</span>
+          </div>
+        </div>
+        <div class="flow-foot">
+          <span>Prevention before disk · detection &amp; verification after →</span>
+          <span class="chain-badge">SHA-256 chained · .agentledger/ledger.jsonl</span>
+        </div>
+      </section>
+    </main>
+
+    <!-- ── Footer ───────────────────────────────────────────── -->
+    <footer>
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <span class="footer-brand-name">📒 AgentLedger</span>
+          <span class="footer-brand-sub">The trust layer for AI coding agents.</span>
+        </div>
+        <div class="footer-links">
+          <a class="footer-link" href="https://github.com/aryansahni30/AgentLedger">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.73 1.27 3.4.97.1-.75.4-1.27.73-1.56-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.38-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5Z"/></svg>
+            GitHub repo
+          </a>
+          <a class="footer-link" href="https://www.npmjs.com/package/agentledger-plugin">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.001V8.667h5.334v5.332h-2.669v-.001zm12.001 0h-1.33v-4h-1.336v4h-1.335v-4h-1.33v4h-2.671V8.667h8.002v5.331zM10.665 10H12v2.667h-1.335V10z"/></svg>
+            npm package
+          </a>
+          <a class="footer-link" href="https://github.com/aryansahni30/AgentLedger/blob/main/LICENSE">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 7h18M6 7l-3 6a4 4 0 0 0 6 0L6 7zm12 0l-3 6a4 4 0 0 0 6 0l-3-6z"/></svg>
+            MIT license
+          </a>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      (function () {
+        var btn = document.getElementById("copyBtn");
+        var label = document.getElementById("copyLabel");
+        if (!btn) return;
+        var text =
+          "/" +
+          document.getElementById("cmd1").textContent +
+          "\n/" +
+          document.getElementById("cmd2").textContent;
+        btn.addEventListener("click", function () {
+          navigator.clipboard.writeText(text).then(
+            function () {
+              btn.classList.add("copied");
+              label.textContent = "Copied";
+              setTimeout(function () {
+                btn.classList.remove("copied");
+                label.textContent = "Copy";
+              }, 1800);
+            },
+            function () {
+              label.textContent = "Copy failed";
+            }
+          );
+        });
+      })();
+    </script>
+  </body>
+</html>

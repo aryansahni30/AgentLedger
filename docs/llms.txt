@@ -1,0 +1,66 @@
+# AgentLedger
+
+> The trust layer for AI coding agents. AgentLedger verifies an agent's completion claims against real process exit codes instead of self-reports, blocks writes to protected files before they reach disk, and records every action to an append-only, SHA-256 hash-chained ledger. It runs as a Claude Code plugin (the primary surface) and as a standalone CLI orchestrator, entirely on the local machine — no hosting, no telemetry, no account.
+
+AgentLedger observes a Claude Code session through five hooks and records structured events to `.agentledger/ledger.jsonl`. A trust score — verified-true claims divided by total verified claims — is tracked across sessions. This file is written for machine readers; every claim below is meant to match the actual behavior of the code.
+
+## What it enforces (honest model)
+
+The mechanisms below carry different guarantees. Do not overstate them.
+
+- Edit/Write to protected paths — PREVENTED before disk. The PreToolUse hook inspects Edit and Write tool calls; a target matching `blockedFiles` (default globs: `**/.env`, `**/secrets.*`, `**/*.pem`, `**/*.key`) is rejected with exit code 2, so the file is never written. `warnFiles` patterns warn but do not block.
+- Bash-driven file changes — DETECTED, not prevented. A shell command (for example `echo secret > .env`) does not go through the Edit/Write tool path and is NOT blocked before disk. It is caught after the fact at SessionEnd by a `git diff` boundary check against the declared boundaries, and recorded as a boundary violation. The guarantee for arbitrary shell writes is detection, not prevention.
+- Completion claims — VERIFIED against real exit codes. The Stop hook scans the assistant turn for a completion claim ("tests pass", "fixed the bug", "done"); on a match it runs the configured `testCommand` (default `npm test`) and records CLAIM_VERIFIED or CLAIM_FALSIFIED based on the exit code. The agent's self-report is logged but never trusted to mark work complete.
+
+## Hook lifecycle
+
+- SessionStart: creates `.agentledger/`, validates the hash chain, prints the trust banner, starts a local dashboard at http://localhost:4242.
+- PreToolUse: blocks Edit/Write to `blockedFiles` before disk (exit code 2); warns on `warnFiles`.
+- PostToolUse: records each Edit/Write/Bash/Read event to the ledger; tracks the read:edit ratio.
+- Stop: detects completion claims in the turn and runs the real test command, producing a verified or falsified result.
+- SessionEnd: runs the `git diff` boundary check, runs the test command, writes the session summary, updates the trust score.
+
+## Ledger
+
+Append-only JSONL at `.agentledger/ledger.jsonl`. Every event carries `hash` and `previous_hash`, a rolling SHA-256 of `previous_hash` concatenated with the serialized event payload. The chain breaks if any event is altered, and it is validated on each session start. Only the orchestrator appends to the ledger; workers return structured results and never write to it directly. Replay reconstructs run state from the event log — it does not re-execute agents to reproduce identical output.
+
+## Install (works today)
+
+Run these two commands inside Claude Code:
+
+```
+/plugin marketplace add aryansahni30/AgentLedger
+/plugin install agentledger@agentledger
+```
+
+This reads the repository's marketplace manifest and installs the `agentledger-plugin` package from npm, wiring all five hooks automatically — no `settings.json` editing. The ledger and a default `.agentledger/config.json` are created on first run, after which every session in the project is observed and scored.
+
+## Skills (invoke inside Claude Code)
+
+- `/trust`: trust score breakdown, recent false claims, and accuracy trend.
+- `/ledger`: recent ledger events and run state for this project.
+- `/verify`: manually run the boundary check plus test command mid-session.
+- `/audit`: trust score, risk assessment, and compliance/governance report.
+- `/handoff`: generate a handoff document to resume the work in a new session.
+
+## CLI (optional, standalone)
+
+AgentLedger also ships an orchestrator that is independent of Claude Code. `agentledger run "<request>"` compiles the request into a task graph and executes tasks sequentially in dependency order; each task runs inside its own git worktree scoped to its allowed files, and a verifier diffs the task branch against the declared boundaries and runs the test command before any patch merges. Commands: `init`, `run`, `ledger view`, `verify`, `replay`.
+
+## Configuration
+
+`.agentledger/config.json` is auto-created on first run; all fields are optional. Defaults: `blockedFiles` = `["**/.env", "**/secrets.*", "**/*.pem", "**/*.key"]`; `warnFiles` = `["**/migrations/**", "**/auth/**", "package.json", "**/middleware.*"]`; `testCommand` = `"npm test"`; `testTimeout` = `30000`; `claimDetection` = `true`; `dashboardPort` = `4242`.
+
+## Links
+
+- [Repository](https://github.com/aryansahni30/AgentLedger)
+- [README](https://github.com/aryansahni30/AgentLedger/blob/main/README.md)
+- [npm package: agentledger-plugin](https://www.npmjs.com/package/agentledger-plugin)
+- [Landing page](https://aryansahni30.github.io/AgentLedger/)
+- [License (MIT)](https://github.com/aryansahni30/AgentLedger/blob/main/LICENSE)
+
+## Not
+
+- No cloud, no telemetry, no account; everything runs locally.
+- Tool restrictions (`allowedTools`) are audit-only metadata, not a technical sandbox — there is no mechanism that prevents an agent with shell access from invoking out-of-scope tools; the ledger audits this after the fact.
+- AgentLedger does not host, transmit, or store data off the machine.
