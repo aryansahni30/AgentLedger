@@ -1,5 +1,11 @@
 node_modules/
 dist/
+# Exception: ship ONLY the plugin's self-contained hook bundles, so git-subdir
+# marketplace installs can run them directly. Everything else under any dist/
+# (core, cli, server, visualizer) stays ignored.
+!/packages/plugin/dist/
+/packages/plugin/dist/*
+!/packages/plugin/dist/*.cjs
 .DS_Store
 **/.DS_Store
 *.js.map

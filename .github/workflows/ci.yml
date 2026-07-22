@@ -30,6 +30,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Verify committed plugin bundles match source
+        run: |
+          git diff --exit-code -- packages/plugin/dist \
+            || { echo "::error::packages/plugin/dist/*.cjs is stale. Run 'pnpm --filter agentledger-plugin build' and commit the result."; exit 1; }
+
       - name: Typecheck
         run: pnpm typecheck
 

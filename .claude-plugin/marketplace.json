@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Trust and verification layer for AI coding agents",
-    "version": "0.3.0"
+    "version": "0.3.1"
   },
   "plugins": [
     {
@@ -15,7 +15,7 @@
         "package": "agentledger-plugin"
       },
       "description": "Blocks writes to protected files, verifies completion claims against real exit codes, and keeps a hash-chained audit ledger.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "author": {
         "name": "Aryan Sahni"
       },
