@@ -98,15 +98,15 @@ The plugin is the primary surface. Install it via the marketplace (above) and it
 - Every action is hash-chained into the ledger; the chain is validated on each session start.
 - A trust score — verified-true claims over total verified claims — is tracked across sessions.
 
-**Skills** — invoke inside Claude Code:
+**Skills** — invoke inside Claude Code. Plugin skills are namespaced under `agentledger:`:
 
 | Skill | What it shows |
 |-------|--------------|
-| `/trust` | Trust score breakdown, recent false claims, accuracy trend |
-| `/ledger` | Recent ledger events and run state for this project |
-| `/verify` | Manually run the boundary check + test command mid-session |
-| `/audit` | Trust score, risk assessment, and compliance audit report |
-| `/handoff` | A handoff document to resume this work in a new session |
+| `/agentledger:trust` | Trust score breakdown, recent false claims, accuracy trend |
+| `/agentledger:ledger` | Recent ledger events and run state for this project |
+| `/agentledger:verify` | Manually run the boundary check + test command mid-session |
+| `/agentledger:audit` | Trust score, risk assessment, and compliance audit report |
+| `/agentledger:handoff` | A handoff document to resume this work in a new session |
 
 **Dashboard** — the SessionStart hook serves a local dashboard at `http://localhost:4242`: trust score over time, per-session claim accuracy, the event stream, and a cross-project view.
 

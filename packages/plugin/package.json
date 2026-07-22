@@ -39,6 +39,7 @@
     "skills/",
     "install.js",
     "README.md",
+    "CHANGELOG.md",
     "PLUGIN_README.md"
   ],
   "devDependencies": {
